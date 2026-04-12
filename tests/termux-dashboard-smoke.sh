@@ -329,7 +329,21 @@ test_tmux_pane_cwd_handoff() {
 
   env -u TMUX HOME="$home_dir" TMUX_TMPDIR="$tmux_tmpdir" TERMUX_DASHBOARD_NO_ATTACH=1 bash "$DASHBOARD_SCRIPT"
   wait_for_tmux_session "$tmux_tmpdir" "termux-dashboard"
-  wait_for_pane_text "$tmux_tmpdir" "$pane_target" "Run 'pkg update && pkg upgrade -y' Y/n (default no)"
+  local first_menu_heading="Run 'pkg update && pkg upgrade -y' Y/n (default no)"
+  wait_for_pane_text "$tmux_tmpdir" "$pane_target" "$first_menu_heading"
+
+  local initial_pane_output
+  initial_pane_output="$(capture_pane_text "$tmux_tmpdir" "$pane_target")"
+
+  local first_non_empty_line
+  first_non_empty_line="$(printf '%s\n' "$initial_pane_output" | sed -n '/[^[:space:]]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}')"
+  if [ "$first_non_empty_line" != "$first_menu_heading" ]; then
+    fail "pre-menu pane output noise detected (first non-empty line: ${first_non_empty_line:-<empty>})"
+  fi
+
+  assert_not_contains "$initial_pane_output" "__td_cwd_file=" "pane output cleanliness"
+  assert_not_contains "$initial_pane_output" "TERMUX_DASHBOARD_FINAL_CWD_FILE=" "pane output cleanliness"
+  assert_not_contains "$initial_pane_output" "--current-project-window" "pane output cleanliness"
 
   tmux_exec "$tmux_tmpdir" send-keys -t "$pane_target" C-m
   wait_for_pane_text "$tmux_tmpdir" "$pane_target" "Default project (Enter): $project_name"
@@ -338,12 +352,6 @@ test_tmux_pane_cwd_handoff() {
   tmux_exec "$tmux_tmpdir" send-keys -t "$pane_target" C-m
 
   wait_for_pane_cwd "$tmux_tmpdir" "$pane_target" "$expected_path"
-
-  local pane_output
-  pane_output="$(capture_pane_text "$tmux_tmpdir" "$pane_target")"
-  if [[ "$pane_output" == *"__td_cwd_file="* ]]; then
-    log "TODO: add pane-output cleanliness assertion after pre-menu echo bug is fixed"
-  fi
 
   tmux_exec "$tmux_tmpdir" kill-session -t "termux-dashboard" >/dev/null 2>&1 || true
 }

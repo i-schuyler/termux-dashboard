@@ -103,7 +103,7 @@ current_project_window_shell_handoff_command() {
   local escaped_script_path
   printf -v escaped_script_path '%q' "$SCRIPT_PATH"
 
-  printf '%s' "__td_cwd_file=\$(mktemp \"\${TMPDIR:-/tmp}/termux-dashboard-cwd.XXXXXX\"); TERMUX_DASHBOARD_FINAL_CWD_FILE=\"\$__td_cwd_file\" bash $escaped_script_path --current-project-window; if [ -s \"\$__td_cwd_file\" ]; then __td_target=\$(cat \"\$__td_cwd_file\"); if [ -d \"\$__td_target\" ]; then cd \"\$__td_target\"; fi; fi; rm -f \"\$__td_cwd_file\""
+  printf '%s' "__td_cwd_file=\$(mktemp \"\${TMPDIR:-/tmp}/termux-dashboard-cwd.XXXXXX\"); TERMUX_DASHBOARD_FINAL_CWD_FILE=\"\$__td_cwd_file\" bash $escaped_script_path --current-project-window; if [ -s \"\$__td_cwd_file\" ]; then __td_target=\$(cat \"\$__td_cwd_file\"); if [ -d \"\$__td_target\" ]; then cd \"\$__td_target\"; fi; fi; rm -f \"\$__td_cwd_file\"; exec bash -i"
 }
 
 append_unique_item() {
@@ -1003,8 +1003,7 @@ new_window_flow() {
     local new_window_index
     local current_project_handoff_command
     current_project_handoff_command="$(current_project_window_shell_handoff_command)"
-    new_window_index="$(tmux new-window -P -F '#{window_index}' -t "$SESSION_NAME:" -n "Current Project Window" -c "$new_window_start_dir")"
-    tmux send-keys -t "$SESSION_NAME:$new_window_index" "$current_project_handoff_command" C-m
+    new_window_index="$(tmux new-window -P -F '#{window_index}' -t "$SESSION_NAME:" -n "Current Project Window" -c "$new_window_start_dir" "$current_project_handoff_command")"
     tmux select-window -t "$SESSION_NAME:$new_window_index" >/dev/null 2>&1 || true
 
     echo "New window opened"
@@ -1035,8 +1034,7 @@ launch_dashboard() {
     local current_project_handoff_command
     current_project_handoff_command="$(current_project_window_shell_handoff_command)"
 
-    tmux new-session -d -s "$SESSION_NAME" -c "$current_project_window_dir" -n "Current Project Window"
-    tmux send-keys -t "$SESSION_NAME:Current Project Window" "$current_project_handoff_command" C-m
+    tmux new-session -d -s "$SESSION_NAME" -c "$current_project_window_dir" -n "Current Project Window" "$current_project_handoff_command"
 
     tmux new-window -t "$SESSION_NAME:" -n "Projects Window" -c "$projects_window_dir"
     tmux send-keys -t "$SESSION_NAME:Projects Window" "bash \"$SCRIPT_PATH\" --projects-window" C-m
