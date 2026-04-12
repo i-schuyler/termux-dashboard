@@ -1,0 +1,1084 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# termux-dashboard
+set -euo pipefail
+
+SCRIPT_NAME="termux-dashboard"
+SESSION_NAME="termux-dashboard"
+CONFIG_DIR="$HOME/.config/termux-dashboard"
+LAST_PROJECT_FILE="$CONFIG_DIR/last_project"
+LAST_SCRIPT_FILE="$CONFIG_DIR/last_script"
+RECENT_PROJECTS_FILE="$CONFIG_DIR/recent_projects"
+RECENT_SCRIPTS_FILE="$CONFIG_DIR/recent_scripts"
+PINNED_PROJECTS_FILE="$CONFIG_DIR/pinned-projects.txt"
+PINNED_SCRIPTS_FILE="$CONFIG_DIR/pinned-scripts.txt"
+PINNED_DISPLAY_LIMIT=5
+RECENT_DISPLAY_LIMIT=5
+DEFAULT_PROJECTS_DIR="$HOME/projects"
+DEFAULT_BIN_DIR="$HOME/bin"
+
+resolve_script_path() {
+  local source_path="${BASH_SOURCE[0]}"
+  if [[ "$source_path" != */* ]]; then
+    source_path="$(command -v "$source_path" 2>/dev/null || true)"
+  fi
+
+  if [ -z "$source_path" ]; then
+    printf '%s\n' "${BASH_SOURCE[0]}"
+    return
+  fi
+
+  local source_dir
+  source_dir="$(cd "$(dirname "$source_path")" && pwd)"
+  printf '%s/%s\n' "$source_dir" "$(basename "$source_path")"
+}
+
+SCRIPT_PATH="$(resolve_script_path)"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+
+expand_tilde_path() {
+  local raw_path="$1"
+  case "$raw_path" in
+    "~")
+      printf '%s\n' "$HOME"
+      ;;
+    "~/"*)
+      printf '%s/%s\n' "$HOME" "${raw_path#~/}"
+      ;;
+    *)
+      printf '%s\n' "$raw_path"
+      ;;
+  esac
+}
+
+read_yes_no_default_no() {
+  local prompt_text="$1"
+  local reply
+
+  read -r -p "$prompt_text " reply
+  case "$reply" in
+    y|Y)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+resolve_existing_dir() {
+  local expected_dir="$1"
+  local fallback_dir="$2"
+  local label="$3"
+  local candidate="$expected_dir"
+  local user_input
+
+  while [ ! -d "$candidate" ]; do
+    echo "Missing expected directory: $candidate"
+    read -r -p "Enter alternate path for $label (Enter for $fallback_dir): " user_input
+    if [ -z "$user_input" ]; then
+      candidate="$fallback_dir"
+    else
+      candidate="$(expand_tilde_path "$user_input")"
+    fi
+    if [ ! -d "$candidate" ]; then
+      echo "Directory not found: $candidate"
+    fi
+  done
+
+  printf '%s\n' "$candidate"
+}
+
+record_final_cwd() {
+  local target_dir="$1"
+  local final_cwd_file="${TERMUX_DASHBOARD_FINAL_CWD_FILE:-}"
+
+  if [ -z "$final_cwd_file" ]; then
+    return
+  fi
+
+  printf '%s\n' "$target_dir" > "$final_cwd_file" 2>/dev/null || true
+}
+
+current_project_window_shell_handoff_command() {
+  local escaped_script_path
+  printf -v escaped_script_path '%q' "$SCRIPT_PATH"
+
+  printf '%s' "__td_cwd_file=\$(mktemp \"\${TMPDIR:-/tmp}/termux-dashboard-cwd.XXXXXX\"); TERMUX_DASHBOARD_FINAL_CWD_FILE=\"\$__td_cwd_file\" bash $escaped_script_path --current-project-window; if [ -s \"\$__td_cwd_file\" ]; then __td_target=\$(cat \"\$__td_cwd_file\"); if [ -d \"\$__td_target\" ]; then cd \"\$__td_target\"; fi; fi; rm -f \"\$__td_cwd_file\""
+}
+
+append_unique_item() {
+  local -n target_array="$1"
+  local value="$2"
+  local existing
+
+  for existing in "${target_array[@]}"; do
+    if [ "$existing" = "$value" ]; then
+      return
+    fi
+  done
+
+  target_array+=("$value")
+}
+
+array_contains_item() {
+  local needle="$1"
+  shift
+  local value
+  for value in "$@"; do
+    if [ "$value" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+truncate_items() {
+  local -n source_items="$1"
+  local limit="$2"
+  local -n output_items="$3"
+  output_items=()
+
+  local index
+  for index in "${!source_items[@]}"; do
+    if [ "$index" -ge "$limit" ]; then
+      break
+    fi
+    output_items+=("${source_items[$index]}")
+  done
+}
+
+load_pin_file_items() {
+  local file_path="$1"
+  local -n output_items="$2"
+  output_items=()
+
+  if [ ! -f "$file_path" ]; then
+    return
+  fi
+
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ -z "$line" ]; then
+      continue
+    fi
+    if [[ "$line" == \#* ]]; then
+      continue
+    fi
+    append_unique_item output_items "$line"
+  done < "$file_path"
+}
+
+load_state_file_items() {
+  local file_path="$1"
+  local -n output_items="$2"
+  output_items=()
+
+  if [ ! -f "$file_path" ]; then
+    return
+  fi
+
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ -z "$line" ]; then
+      continue
+    fi
+    append_unique_item output_items "$line"
+  done < "$file_path"
+}
+
+filter_known_items() {
+  local -n candidate_items="$1"
+  local -n known_items="$2"
+  local -n output_items="$3"
+  output_items=()
+
+  local item
+  for item in "${candidate_items[@]}"; do
+    if array_contains_item "$item" "${known_items[@]}"; then
+      append_unique_item output_items "$item"
+    fi
+  done
+}
+
+update_recent_items_file() {
+  local file_path="$1"
+  local selected_item="$2"
+  local max_items="$3"
+  local -a existing_items=()
+  local -a merged_items=()
+  local item
+
+  load_state_file_items "$file_path" existing_items
+  merged_items+=("$selected_item")
+
+  for item in "${existing_items[@]}"; do
+    if [ "$item" = "$selected_item" ]; then
+      continue
+    fi
+    merged_items+=("$item")
+  done
+
+  : > "$file_path"
+  local index
+  for index in "${!merged_items[@]}"; do
+    if [ "$index" -ge "$max_items" ]; then
+      break
+    fi
+    printf '%s\n' "${merged_items[$index]}" >> "$file_path"
+  done
+}
+
+repo_is_clean() {
+  [ -z "$(git status --porcelain)" ]
+}
+
+current_git_branch() {
+  git symbolic-ref --quiet --short HEAD 2>/dev/null || true
+}
+
+detect_default_branch() {
+  local origin_head
+  origin_head="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [ -n "$origin_head" ]; then
+    printf '%s\n' "${origin_head#origin/}"
+    return 0
+  fi
+
+  local remote_head
+  remote_head="$(git remote show origin 2>/dev/null | sed -n 's/^  HEAD branch: //p' | head -n 1)"
+  if [ -n "$remote_head" ] && [ "$remote_head" != "(unknown)" ]; then
+    printf '%s\n' "$remote_head"
+    return 0
+  fi
+
+  return 1
+}
+
+default_branch_compare_ref() {
+  local default_branch="$1"
+
+  if git show-ref --verify --quiet "refs/remotes/origin/$default_branch"; then
+    printf '%s\n' "origin/$default_branch"
+    return 0
+  fi
+
+  if git show-ref --verify --quiet "refs/heads/$default_branch"; then
+    printf '%s\n' "$default_branch"
+    return 0
+  fi
+
+  return 1
+}
+
+default_branch_remote_ref() {
+  local default_branch="$1"
+
+  if git show-ref --verify --quiet "refs/remotes/origin/$default_branch"; then
+    printf '%s\n' "origin/$default_branch"
+    return 0
+  fi
+
+  return 1
+}
+
+default_branch_remote_relation() {
+  local default_branch="$1"
+  local remote_ref="$2"
+
+  if ! git show-ref --verify --quiet "refs/heads/$default_branch"; then
+    return 1
+  fi
+
+  local counts
+  counts="$(git rev-list --left-right --count "$default_branch...$remote_ref" 2>/dev/null || true)"
+  if [ -z "$counts" ]; then
+    return 1
+  fi
+
+  local ahead_count behind_count
+  read -r ahead_count behind_count <<< "$counts"
+
+  if [ "$ahead_count" -eq 0 ] && [ "$behind_count" -eq 0 ]; then
+    printf '%s\n' "up-to-date"
+    return 0
+  fi
+
+  if [ "$ahead_count" -eq 0 ] && [ "$behind_count" -gt 0 ]; then
+    printf '%s\n' "behind"
+    return 0
+  fi
+
+  if [ "$ahead_count" -gt 0 ] && [ "$behind_count" -eq 0 ]; then
+    printf '%s\n' "ahead"
+    return 0
+  fi
+
+  printf '%s\n' "diverged"
+}
+
+print_repo_status_summary() {
+  local current_branch="$1"
+  local clean_state="$2"
+  local default_branch="$3"
+  local relation="$4"
+
+  echo "[git] status: branch '$current_branch', working tree $clean_state"
+
+  if [ -n "$default_branch" ]; then
+    if [ -n "$relation" ]; then
+      echo "[git] status: default '$default_branch' is $relation vs origin"
+    else
+      echo "[git] status: default '$default_branch' relation vs origin unavailable"
+    fi
+  else
+    echo "[git] status: default branch unavailable"
+  fi
+}
+
+checkout_default_branch() {
+  local default_branch="$1"
+
+  if git show-ref --verify --quiet "refs/heads/$default_branch"; then
+    git checkout "$default_branch" >/dev/null 2>&1
+    return $?
+  fi
+
+  if git show-ref --verify --quiet "refs/remotes/origin/$default_branch"; then
+    git checkout -b "$default_branch" --track "origin/$default_branch" >/dev/null 2>&1
+    return $?
+  fi
+
+  return 1
+}
+
+run_stale_branch_cleanup() {
+  local default_branch="$1"
+  local compare_ref="$2"
+  local current_branch="$3"
+  local branch_name
+  local entry
+  local current_branch_is_eligible=0
+  local -a stale_candidates=()
+  local -a eligible_branches=()
+
+  mapfile -t stale_candidates < <(
+    git for-each-ref refs/heads --format='%(refname:short)|%(upstream:track)' \
+      | awk -F'|' '$2 ~ /\[gone\]/ {print $1}'
+  )
+
+  if [ "${#stale_candidates[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  for entry in "${stale_candidates[@]}"; do
+    branch_name="$entry"
+    if [ "$branch_name" = "$default_branch" ]; then
+      continue
+    fi
+
+    if git merge-base --is-ancestor "$branch_name" "$compare_ref" >/dev/null 2>&1; then
+      eligible_branches+=("$branch_name")
+      if [ "$branch_name" = "$current_branch" ]; then
+        current_branch_is_eligible=1
+      fi
+    fi
+  done
+
+  if [ "${#eligible_branches[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  if [ "$current_branch_is_eligible" -eq 1 ]; then
+    if ! checkout_default_branch "$default_branch"; then
+      echo "[git] cleanup skipped: could not switch to default branch '$default_branch'"
+      return 1
+    fi
+  fi
+
+  current_branch="$(current_git_branch)"
+  for branch_name in "${eligible_branches[@]}"; do
+    if [ "$branch_name" = "$default_branch" ] || [ "$branch_name" = "$current_branch" ]; then
+      continue
+    fi
+    git branch -d "$branch_name" >/dev/null 2>&1 || true
+  done
+
+  return 0
+}
+
+clean_only_pull() {
+  local default_branch="$1"
+
+  if repo_is_clean; then
+    echo "[git] clean → pulling with rebase from '$default_branch'..."
+    git pull --rebase origin "$default_branch"
+  else
+    echo "[git] local changes detected → skipping pull"
+    git status -sb
+  fi
+}
+
+handle_selected_repo_git_flow() {
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "[git] pull skipped: selected directory is not a git repository"
+    return
+  fi
+
+  local current_branch
+  current_branch="$(current_git_branch)"
+  if [ -z "$current_branch" ]; then
+    echo "[git] pull skipped: detached HEAD"
+    return
+  fi
+
+  local clean_state="dirty"
+  if repo_is_clean; then
+    clean_state="clean"
+  fi
+
+  local default_branch
+  default_branch="$(detect_default_branch 2>/dev/null || true)"
+
+  local remote_ref=""
+  if [ -n "$default_branch" ]; then
+    remote_ref="$(default_branch_remote_ref "$default_branch" 2>/dev/null || true)"
+  fi
+
+  local relation=""
+  if [ -n "$default_branch" ] && [ -n "$remote_ref" ]; then
+    relation="$(default_branch_remote_relation "$default_branch" "$remote_ref" 2>/dev/null || true)"
+  fi
+
+  print_repo_status_summary "$current_branch" "$clean_state" "$default_branch" "$relation"
+
+  if ! repo_is_clean; then
+    echo "[git] repository is dirty; skipping cleanup and pull"
+    return
+  fi
+
+  if [ -z "$default_branch" ]; then
+    echo "[git] pull skipped: could not determine default branch"
+    return
+  fi
+
+  if ! git fetch --prune >/dev/null 2>&1; then
+    echo "[git] cleanup skipped: git fetch --prune failed"
+  else
+    local compare_ref
+    compare_ref="$(default_branch_compare_ref "$default_branch" 2>/dev/null || true)"
+    if [ -n "$compare_ref" ]; then
+      run_stale_branch_cleanup "$default_branch" "$compare_ref" "$current_branch" || true
+    else
+      echo "[git] cleanup skipped: default branch reference unavailable"
+    fi
+  fi
+
+  current_branch="$(current_git_branch)"
+  if [ -z "$current_branch" ]; then
+    echo "[git] pull skipped: detached HEAD"
+    return
+  fi
+
+  if ! repo_is_clean; then
+    echo "[git] pull skipped: repository is not clean"
+    return
+  fi
+
+  if [ "$current_branch" != "$default_branch" ]; then
+    echo "[git] pull skipped: current branch '$current_branch' is not default '$default_branch'"
+    return
+  fi
+
+  remote_ref="$(default_branch_remote_ref "$default_branch" 2>/dev/null || true)"
+  if [ -z "$remote_ref" ]; then
+    echo "[git] pull skipped: default branch remote reference unavailable"
+    return
+  fi
+
+  relation="$(default_branch_remote_relation "$default_branch" "$remote_ref" 2>/dev/null || true)"
+  if [ -z "$relation" ]; then
+    echo "[git] pull skipped: could not determine default-branch relation"
+    return
+  fi
+
+  case "$relation" in
+    behind)
+      if read_yes_no_default_no "Do you want to git pull? Y/n (default no)"; then
+        clean_only_pull "$default_branch"
+      fi
+      ;;
+    up-to-date)
+      echo "[git] pull skipped: default branch is up-to-date"
+      ;;
+    ahead)
+      echo "[git] pull skipped: default branch is ahead of origin"
+      ;;
+    diverged)
+      echo "[git] pull skipped: default branch diverged from origin"
+      ;;
+    *)
+      echo "[git] pull skipped: default-branch relation unknown"
+      ;;
+  esac
+}
+
+startup_dir_for() {
+  local preferred_dir="$1"
+  if [ -d "$preferred_dir" ]; then
+    printf '%s\n' "$preferred_dir"
+    return
+  fi
+
+  printf '%s\n' "$SCRIPT_DIR"
+}
+
+list_projects() {
+  local projects_dir="$1"
+  find "$projects_dir" -mindepth 1 -maxdepth 1 -type d -print0 \
+    | while IFS= read -r -d '' project_path; do
+        basename "$project_path"
+      done \
+    | LC_ALL=C sort
+}
+
+select_project_name() {
+  local projects_dir="$1"
+  local user_choice
+  local default_index=0
+  local exit_index=0
+  local show_full_index=0
+  local last_project=""
+  local invalid_last_project=0
+  local project_count=0
+  local index=0
+  local menu_index=0
+  local show_full_list=0
+  local item
+  local -a compact_items=()
+  local -a menu_items=()
+  local -a pinned_items=()
+  local -a recent_items=()
+  local -a valid_pinned_items=()
+  local -a valid_recent_items=()
+  local -a limited_pinned_items=()
+  local -a limited_recent_items=()
+
+  mapfile -t projects < <(list_projects "$projects_dir")
+
+  if [ -f "$LAST_PROJECT_FILE" ]; then
+    last_project="$(cat "$LAST_PROJECT_FILE" 2>/dev/null || true)"
+  fi
+
+  project_count="${#projects[@]}"
+  if [ "$project_count" -gt 0 ] && [ -n "$last_project" ]; then
+    for index in "${!projects[@]}"; do
+      if [ "${projects[$index]}" = "$last_project" ]; then
+        default_index=$((index + 1))
+        break
+      fi
+    done
+
+    if [ "$default_index" -eq 0 ]; then
+      invalid_last_project=1
+      rm -f "$LAST_PROJECT_FILE" 2>/dev/null || true
+    fi
+  fi
+
+  load_pin_file_items "$PINNED_PROJECTS_FILE" pinned_items
+  filter_known_items pinned_items projects valid_pinned_items
+
+  load_state_file_items "$RECENT_PROJECTS_FILE" recent_items
+  filter_known_items recent_items projects valid_recent_items
+
+  truncate_items valid_pinned_items "$PINNED_DISPLAY_LIMIT" limited_pinned_items
+  truncate_items valid_recent_items "$RECENT_DISPLAY_LIMIT" limited_recent_items
+
+  for item in "${limited_pinned_items[@]}"; do
+    append_unique_item compact_items "$item"
+  done
+  for item in "${limited_recent_items[@]}"; do
+    append_unique_item compact_items "$item"
+  done
+
+  while true; do
+    menu_items=()
+    menu_index=0
+    show_full_index=0
+
+    if [ "$show_full_list" -eq 1 ]; then
+      echo "Choose a project to open (full list):" >&2
+      if [ "$project_count" -eq 0 ]; then
+        echo "No directories found under: $projects_dir" >&2
+      else
+        for index in "${!projects[@]}"; do
+          menu_index=$((index + 1))
+          printf '%s) %s\n' "$menu_index" "${projects[$index]}" >&2
+        done
+      fi
+      exit_index=$((project_count + 1))
+      printf '%s) Exit\n' "$exit_index" >&2
+    else
+      echo "Choose a project to open:" >&2
+
+      echo "Pinned projects:" >&2
+      if [ "${#limited_pinned_items[@]}" -eq 0 ]; then
+        echo "  (none)" >&2
+      else
+        for item in "${limited_pinned_items[@]}"; do
+          menu_index=$((menu_index + 1))
+          menu_items+=("$item")
+          printf '%s) %s\n' "$menu_index" "$item" >&2
+        done
+      fi
+
+      echo "Recent projects:" >&2
+      local added_recent=0
+      for item in "${limited_recent_items[@]}"; do
+        if array_contains_item "$item" "${menu_items[@]}"; then
+          continue
+        fi
+        menu_index=$((menu_index + 1))
+        menu_items+=("$item")
+        printf '%s) %s\n' "$menu_index" "$item" >&2
+        added_recent=1
+      done
+      if [ "$added_recent" -eq 0 ]; then
+        echo "  (none)" >&2
+      fi
+
+      show_full_index=$((menu_index + 1))
+      printf '%s) Show full list\n' "$show_full_index" >&2
+      exit_index=$((show_full_index + 1))
+      printf '%s) Exit\n' "$exit_index" >&2
+    fi
+
+    if [ "$default_index" -gt 0 ]; then
+      echo "Default project (Enter): ${projects[$((default_index - 1))]}" >&2
+    else
+      if [ "$invalid_last_project" -eq 1 ]; then
+        echo "Remembered project is no longer valid and was cleared: $last_project" >&2
+      fi
+      echo "No valid remembered default project. Press Enter to open $DEFAULT_PROJECTS_DIR" >&2
+    fi
+
+    read -r -p "Project selection (number or Enter for default): " user_choice
+
+    if [ -z "$user_choice" ]; then
+      if [ "$default_index" -gt 0 ]; then
+        printf '%s\n' "${projects[$((default_index - 1))]}"
+      else
+        printf '%s\n' "__EXIT__"
+      fi
+      return
+    fi
+
+    if ! [[ "$user_choice" =~ ^[0-9]+$ ]]; then
+      echo "Invalid choice. Enter a number." >&2
+      continue
+    fi
+
+    if [ "$show_full_list" -eq 1 ]; then
+      if [ "$user_choice" -ge 1 ] && [ "$user_choice" -le "$project_count" ]; then
+        printf '%s\n' "${projects[$((user_choice - 1))]}"
+        return
+      fi
+      if [ "$user_choice" -eq "$exit_index" ]; then
+        printf '%s\n' "__EXIT__"
+        return
+      fi
+    else
+      if [ "$user_choice" -ge 1 ] && [ "$user_choice" -le "${#menu_items[@]}" ]; then
+        printf '%s\n' "${menu_items[$((user_choice - 1))]}"
+        return
+      fi
+      if [ "$user_choice" -eq "$show_full_index" ]; then
+        show_full_list=1
+        continue
+      fi
+      if [ "$user_choice" -eq "$exit_index" ]; then
+        printf '%s\n' "__EXIT__"
+        return
+      fi
+    fi
+
+    echo "Invalid choice. Enter a listed number." >&2
+  done
+}
+
+current_project_window_flow() {
+  mkdir -p "$CONFIG_DIR"
+
+  if read_yes_no_default_no "Run 'pkg update && pkg upgrade -y' Y/n (default no)"; then
+    pkg update && pkg upgrade -y
+  fi
+
+  local projects_dir
+  projects_dir="$(resolve_existing_dir "$DEFAULT_PROJECTS_DIR" "$DEFAULT_PROJECTS_DIR" "projects")"
+
+  local selected_project
+  selected_project="$(select_project_name "$projects_dir")"
+  if [ "$selected_project" = "__EXIT__" ]; then
+    cd "$projects_dir" || return
+    record_final_cwd "$projects_dir"
+    return
+  fi
+
+  local selected_project_path="$projects_dir/$selected_project"
+  if [ ! -d "$selected_project_path" ]; then
+    echo "Project no longer exists: $selected_project_path"
+    cd "$projects_dir" || return
+    record_final_cwd "$projects_dir"
+    return
+  fi
+
+  printf '%s\n' "$selected_project" > "$LAST_PROJECT_FILE"
+  update_recent_items_file "$RECENT_PROJECTS_FILE" "$selected_project" "$RECENT_DISPLAY_LIMIT"
+  cd "$selected_project_path" || return
+  handle_selected_repo_git_flow
+  cd "$selected_project_path" || return
+  record_final_cwd "$selected_project_path"
+}
+
+projects_window_flow() {
+  local projects_dir
+  projects_dir="$(resolve_existing_dir "$DEFAULT_PROJECTS_DIR" "$DEFAULT_PROJECTS_DIR" "projects")"
+  cd "$projects_dir" || return
+}
+
+list_bin_scripts() {
+  local scripts_dir="$1"
+  find "$scripts_dir" -mindepth 1 -maxdepth 1 -type f -print0 \
+    | while IFS= read -r -d '' script_path; do
+        if [ -x "$script_path" ]; then
+          basename "$script_path"
+        fi
+      done \
+    | LC_ALL=C sort
+}
+
+select_script_name() {
+  local scripts_dir="$1"
+  local user_choice
+  local default_index=0
+  local exit_index=0
+  local show_full_index=0
+  local last_script=""
+  local invalid_last_script=0
+  local script_count=0
+  local index=0
+  local menu_index=0
+  local show_full_list=0
+  local item
+  local -a compact_items=()
+  local -a menu_items=()
+  local -a pinned_items=()
+  local -a recent_items=()
+  local -a valid_pinned_items=()
+  local -a valid_recent_items=()
+  local -a limited_pinned_items=()
+  local -a limited_recent_items=()
+
+  mapfile -t scripts < <(list_bin_scripts "$scripts_dir")
+
+  if [ -f "$LAST_SCRIPT_FILE" ]; then
+    last_script="$(cat "$LAST_SCRIPT_FILE" 2>/dev/null || true)"
+  fi
+
+  script_count="${#scripts[@]}"
+  if [ "$script_count" -gt 0 ] && [ -n "$last_script" ]; then
+    for index in "${!scripts[@]}"; do
+      if [ "${scripts[$index]}" = "$last_script" ]; then
+        default_index=$((index + 1))
+        break
+      fi
+    done
+
+    if [ "$default_index" -eq 0 ]; then
+      invalid_last_script=1
+      rm -f "$LAST_SCRIPT_FILE" 2>/dev/null || true
+    fi
+  fi
+
+  load_pin_file_items "$PINNED_SCRIPTS_FILE" pinned_items
+  filter_known_items pinned_items scripts valid_pinned_items
+
+  load_state_file_items "$RECENT_SCRIPTS_FILE" recent_items
+  filter_known_items recent_items scripts valid_recent_items
+
+  truncate_items valid_pinned_items "$PINNED_DISPLAY_LIMIT" limited_pinned_items
+  truncate_items valid_recent_items "$RECENT_DISPLAY_LIMIT" limited_recent_items
+
+  for item in "${limited_pinned_items[@]}"; do
+    append_unique_item compact_items "$item"
+  done
+  for item in "${limited_recent_items[@]}"; do
+    append_unique_item compact_items "$item"
+  done
+
+  while true; do
+    menu_items=()
+    menu_index=0
+    show_full_index=0
+
+    if [ "$show_full_list" -eq 1 ]; then
+      echo "Choose a script to run (full list):" >&2
+      if [ "$script_count" -eq 0 ]; then
+        echo "No executable files found under: $scripts_dir" >&2
+      else
+        for index in "${!scripts[@]}"; do
+          menu_index=$((index + 1))
+          printf '%s) %s\n' "$menu_index" "${scripts[$index]}" >&2
+        done
+      fi
+      exit_index=$((script_count + 1))
+      printf '%s) Exit\n' "$exit_index" >&2
+    else
+      echo "Choose a script to run:" >&2
+
+      echo "Pinned scripts:" >&2
+      if [ "${#limited_pinned_items[@]}" -eq 0 ]; then
+        echo "  (none)" >&2
+      else
+        for item in "${limited_pinned_items[@]}"; do
+          menu_index=$((menu_index + 1))
+          menu_items+=("$item")
+          printf '%s) %s\n' "$menu_index" "$item" >&2
+        done
+      fi
+
+      echo "Recent scripts:" >&2
+      local added_recent=0
+      for item in "${limited_recent_items[@]}"; do
+        if array_contains_item "$item" "${menu_items[@]}"; then
+          continue
+        fi
+        menu_index=$((menu_index + 1))
+        menu_items+=("$item")
+        printf '%s) %s\n' "$menu_index" "$item" >&2
+        added_recent=1
+      done
+      if [ "$added_recent" -eq 0 ]; then
+        echo "  (none)" >&2
+      fi
+
+      show_full_index=$((menu_index + 1))
+      printf '%s) Show full list\n' "$show_full_index" >&2
+      exit_index=$((show_full_index + 1))
+      printf '%s) Exit\n' "$exit_index" >&2
+    fi
+
+    if [ "$default_index" -gt 0 ]; then
+      echo "Default script (Enter): ${scripts[$((default_index - 1))]}" >&2
+    else
+      if [ "$invalid_last_script" -eq 1 ]; then
+        echo "Remembered script is no longer valid and was cleared: $last_script" >&2
+      fi
+      echo "No valid remembered default script. Press Enter to open $DEFAULT_BIN_DIR" >&2
+    fi
+
+    read -r -p "Script selection (number or Enter for default): " user_choice
+
+    if [ -z "$user_choice" ]; then
+      if [ "$default_index" -gt 0 ]; then
+        printf '%s\n' "${scripts[$((default_index - 1))]}"
+      else
+        printf '%s\n' "__EXIT__"
+      fi
+      return
+    fi
+
+    if ! [[ "$user_choice" =~ ^[0-9]+$ ]]; then
+      echo "Invalid choice. Enter a number." >&2
+      continue
+    fi
+
+    if [ "$show_full_list" -eq 1 ]; then
+      if [ "$user_choice" -ge 1 ] && [ "$user_choice" -le "$script_count" ]; then
+        printf '%s\n' "${scripts[$((user_choice - 1))]}"
+        return
+      fi
+      if [ "$user_choice" -eq "$exit_index" ]; then
+        printf '%s\n' "__EXIT__"
+        return
+      fi
+    else
+      if [ "$user_choice" -ge 1 ] && [ "$user_choice" -le "${#menu_items[@]}" ]; then
+        printf '%s\n' "${menu_items[$((user_choice - 1))]}"
+        return
+      fi
+      if [ "$user_choice" -eq "$show_full_index" ]; then
+        show_full_list=1
+        continue
+      fi
+      if [ "$user_choice" -eq "$exit_index" ]; then
+        printf '%s\n' "__EXIT__"
+        return
+      fi
+    fi
+
+    echo "Invalid choice. Enter a listed number." >&2
+  done
+}
+
+scripts_window_flow() {
+  mkdir -p "$CONFIG_DIR"
+
+  local scripts_dir
+  scripts_dir="$(resolve_existing_dir "$DEFAULT_BIN_DIR" "$DEFAULT_BIN_DIR" "bin scripts")"
+
+  local selected_script
+  selected_script="$(select_script_name "$scripts_dir")"
+  if [ "$selected_script" = "__EXIT__" ]; then
+    cd "$scripts_dir" || return
+    return
+  fi
+
+  local selected_script_path="$scripts_dir/$selected_script"
+  if [ ! -f "$selected_script_path" ] || [ ! -x "$selected_script_path" ]; then
+    echo "Script no longer runnable: $selected_script_path"
+    cd "$scripts_dir" || return
+    return
+  fi
+
+  printf '%s\n' "$selected_script" > "$LAST_SCRIPT_FILE"
+  update_recent_items_file "$RECENT_SCRIPTS_FILE" "$selected_script" "$RECENT_DISPLAY_LIMIT"
+  cd "$scripts_dir" || return
+
+  set +e
+  "./$selected_script"
+  local script_exit_code=$?
+  set -e
+
+  if [ "$script_exit_code" -ne 0 ]; then
+    echo "Script exited with status: $script_exit_code"
+  fi
+}
+
+print_help() {
+  cat <<'EOF'
+termux-dashboard
+
+Usage:
+  termux-dashboard
+  termux-dashboard --current-project-window
+  termux-dashboard --projects-window
+  termux-dashboard --new-window
+  termux-dashboard --scripts-window
+  termux-dashboard --help
+  termux-dashboard help
+
+Windows:
+  Current Project Window  Select a project, run git status/cleanup/pull gating, land in selected repo.
+  Projects Window         Open configured projects directory.
+  New Window              Repeatable launcher for another Current Project Window flow.
+  Scripts Window          Select and run executable scripts from configured scripts directory.
+
+State:
+  Base state dir: $HOME/.config/termux-dashboard/
+  Last project:   $HOME/.config/termux-dashboard/last_project
+  Last script:    $HOME/.config/termux-dashboard/last_script
+  Recent projects:$HOME/.config/termux-dashboard/recent_projects
+  Recent scripts: $HOME/.config/termux-dashboard/recent_scripts
+
+Pinned files (user-local, not repo-canonical):
+  Projects: $HOME/.config/termux-dashboard/pinned-projects.txt
+  Scripts:  $HOME/.config/termux-dashboard/pinned-scripts.txt
+
+Pinned file format:
+  - One item per line
+  - Blank lines allowed
+  - Lines beginning with # are comments
+  - Nonexistent entries are skipped
+EOF
+}
+
+new_window_flow() {
+  while true; do
+    echo "Press enter to open a new window."
+    IFS= read -r _
+
+    local new_window_start_dir
+    new_window_start_dir="$(startup_dir_for "$DEFAULT_PROJECTS_DIR")"
+
+    local new_window_index
+    local current_project_handoff_command
+    current_project_handoff_command="$(current_project_window_shell_handoff_command)"
+    new_window_index="$(tmux new-window -P -F '#{window_index}' -t "$SESSION_NAME:" -n "Current Project Window" -c "$new_window_start_dir")"
+    tmux send-keys -t "$SESSION_NAME:$new_window_index" "$current_project_handoff_command" C-m
+    tmux select-window -t "$SESSION_NAME:$new_window_index" >/dev/null 2>&1 || true
+
+    echo "New window opened"
+  done
+}
+
+launch_dashboard() {
+  if ! command -v tmux >/dev/null 2>&1; then
+    echo "tmux is required but was not found in PATH."
+    exit 1
+  fi
+
+  mkdir -p "$CONFIG_DIR"
+
+  if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    local current_project_window_dir
+    current_project_window_dir="$(startup_dir_for "$DEFAULT_PROJECTS_DIR")"
+
+    local projects_window_dir
+    projects_window_dir="$(startup_dir_for "$DEFAULT_PROJECTS_DIR")"
+
+    local new_window_dir
+    new_window_dir="$(startup_dir_for "$DEFAULT_PROJECTS_DIR")"
+
+    local scripts_window_dir
+    scripts_window_dir="$(startup_dir_for "$DEFAULT_BIN_DIR")"
+
+    local current_project_handoff_command
+    current_project_handoff_command="$(current_project_window_shell_handoff_command)"
+
+    tmux new-session -d -s "$SESSION_NAME" -c "$current_project_window_dir" -n "Current Project Window"
+    tmux send-keys -t "$SESSION_NAME:Current Project Window" "$current_project_handoff_command" C-m
+
+    tmux new-window -t "$SESSION_NAME:" -n "Projects Window" -c "$projects_window_dir"
+    tmux send-keys -t "$SESSION_NAME:Projects Window" "bash \"$SCRIPT_PATH\" --projects-window" C-m
+
+    tmux new-window -t "$SESSION_NAME:" -n "New Window" -c "$new_window_dir"
+    tmux send-keys -t "$SESSION_NAME:New Window" "bash \"$SCRIPT_PATH\" --new-window" C-m
+
+    tmux new-window -t "$SESSION_NAME:" -n "Scripts Window" -c "$scripts_window_dir"
+    tmux send-keys -t "$SESSION_NAME:Scripts Window" "bash \"$SCRIPT_PATH\" --scripts-window" C-m
+
+    tmux select-window -t "$SESSION_NAME:Current Project Window"
+  fi
+
+  if [ "${TERMUX_DASHBOARD_NO_ATTACH:-0}" = "1" ]; then
+    return
+  fi
+
+  exec tmux attach -t "$SESSION_NAME"
+}
+
+case "${1:-}" in
+  --help|-h|help)
+    print_help
+    ;;
+  --current-project-window)
+    current_project_window_flow
+    ;;
+  --projects-window)
+    projects_window_flow
+    ;;
+  --new-window)
+    new_window_flow
+    ;;
+  --scripts-window)
+    scripts_window_flow
+    ;;
+  "")
+    launch_dashboard
+    ;;
+  *)
+    echo "Unknown option: $1"
+    exit 1
+    ;;
+esac
+# termux-dashboard EOF

@@ -1,0 +1,25 @@
+name: Dashboard PR CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dashboard-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck tmux
+
+      - name: Shell lint
+        run: bash tests/lint-shell.sh
+
+      - name: Dashboard smoke tests
+        run: bash tests/termux-dashboard-smoke.sh
