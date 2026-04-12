@@ -6,6 +6,8 @@ _One-tap project entry for Termux and tmux._
 
 Core promise: Open the right repo, in the right tmux workspace, with git-aware mobile re-entry in Termux.
 
+Status: usable alpha. Stable enough for real workflows.
+
 ![Termux Dashboard hero screenshot (current project view)](docs/assets/termux-dashboard-hero-current-project.png)
 
 ## Why it exists
@@ -63,3 +65,7 @@ bash tests/termux-dashboard-smoke.sh
 ## Downstream integration note
 
 `termux-shortcuts` owns installer/integration concerns. This repo stays focused on `termux-dashboard` runtime behavior and validation.
+
+## Support
+
+If this is useful and you want to support continued work, GitHub Sponsors helps. I’m also interested in paid setup/customization/support for real workflows.
