@@ -40,6 +40,16 @@ This repository is the source-of-truth for dashboard behavior, tests, and docs.
 - Business-compatible posture: paid support/customization can be layered later without changing repo scope.
 - Downstream installer/integration work belongs in `termux-shortcuts`.
 
+## Install status
+
+This public repo is the source of truth for `termux-dashboard`.
+
+The widget/integration installer I currently use lives in a private downstream repo for my personal setup, so public installation is manual for now.
+
+For alpha testing, copy `scripts/termux-dashboard` into your Termux widget shortcuts path and make it executable.
+
+A more public installer path may come later if there is demand.
+
 ## Repo layout
 
 - `scripts/termux-dashboard` — dashboard launcher and window flows.
