@@ -36,3 +36,12 @@ This file tracks curated, dashboard-only decisions for this repo.
 - Status: Locked
 - Decision: Installer and downstream integration belong in `termux-shortcuts`, not in this repo.
 - Consequence: This repo stays scoped to dashboard product behavior and validation.
+
+### D-006 — State/config file naming convention
+
+- Status: Locked
+- Decision: Only pinned user-editable config files use `.txt` (`pinned-projects.txt`, `pinned-scripts.txt`).
+- Decision: Recent and last-selected internal state files are extensionless (`recent_projects`, `recent_scripts`, `last_project`, `last_script`).
+- Decision: Pinned files are user-editable config; recent/last files are internal runtime state.
+- Consequence: Docs and help output should preserve this distinction and avoid implying `.txt` on recent state files.
+- Follow-up note: if legacy `recent_projects.txt` or `recent_scripts.txt` files are encountered in user environments, runtime compatibility handling should be addressed in a later runtime slice.

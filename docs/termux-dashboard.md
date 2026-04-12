@@ -60,14 +60,21 @@ The dashboard session uses exactly 4 windows in this exact order:
 
 - State persistence path: `$HOME/.config/termux-dashboard/`
 - Git behavior: behind-only pull prompt, default `no`
-- Pinned projects source file: `$HOME/.config/termux-dashboard/pinned-projects.txt`
-- Pinned scripts source file: `$HOME/.config/termux-dashboard/pinned-scripts.txt`
+- User-editable pinned config files:
+  - `$HOME/.config/termux-dashboard/pinned-projects.txt`
+  - `$HOME/.config/termux-dashboard/pinned-scripts.txt`
+- Internal recent state files:
+  - `$HOME/.config/termux-dashboard/recent_projects`
+  - `$HOME/.config/termux-dashboard/recent_scripts`
+- Internal last-selected state files:
+  - `$HOME/.config/termux-dashboard/last_project`
+  - `$HOME/.config/termux-dashboard/last_script`
 - Pinned file format: plain text, one item per line.
 - Blank lines in pinned files are allowed.
 - Lines beginning with `#` in pinned files are comments.
 - Missing/nonexistent pinned entries are skipped.
 - Help command output should print the exact pinned-file paths so users can edit them quickly.
-- Pinned configuration files are user-local state, not repo-canonical data.
+- Naming convention: only pinned config files use `.txt`; recent/last internal state files are extensionless.
 
 ## Runtime discovery guidance
 
