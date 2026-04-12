@@ -6,6 +6,8 @@ _One-tap project entry for Termux and tmux._
 
 Core promise: Open the right repo, in the right tmux workspace, with git-aware mobile re-entry in Termux.
 
+![Termux Dashboard hero screenshot (current project view)](docs/assets/termux-dashboard-hero-current-project.png)
+
 ## Why it exists
 
 Using Termux seriously on Android is powerful, but getting back into the right repo and tmux state is slower and messier than it should be.
@@ -44,6 +46,12 @@ This repository is the source-of-truth for dashboard behavior, tests, and docs.
 - `docs/termux-dashboard.md` — dashboard behavior spec.
 - `docs/DECISIONS.md` — dashboard-only architecture/behavior decisions.
 - `docs/INDEX.md` — docs entrypoint for this repo.
+
+## Screenshots and demo
+
+![Termux Dashboard repository landing screenshot](docs/assets/termux-dashboard-repo-landing.png)
+
+Demo clip: [Widget to repo flow (MP4)](docs/assets/termux-dashboard-demo-widget-to-repo.mp4)
 
 ## Local testing
 
