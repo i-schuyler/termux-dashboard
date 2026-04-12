@@ -188,7 +188,12 @@ test_help_output() {
 
   assert_contains "$output" "Usage:" "help output"
   assert_contains "$output" "termux-dashboard --current-project-window" "help output"
+  assert_contains "$output" "Internal state files (extensionless):" "help output"
+  assert_contains "$output" 'Recent projects:$HOME/.config/termux-dashboard/recent_projects' "help output"
+  assert_contains "$output" 'Recent scripts: $HOME/.config/termux-dashboard/recent_scripts' "help output"
+  assert_contains "$output" 'Last project:   $HOME/.config/termux-dashboard/last_project' "help output"
   assert_contains "$output" 'Projects: $HOME/.config/termux-dashboard/pinned-projects.txt' "help output"
+  assert_contains "$output" "Editable pin config files (.txt, user-local, not repo-canonical):" "help output"
 }
 
 test_pins_absent() {

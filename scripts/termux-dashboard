@@ -973,14 +973,14 @@ Windows:
   New Window              Repeatable launcher for another Current Project Window flow.
   Scripts Window          Select and run executable scripts from configured scripts directory.
 
-State:
+Internal state files (extensionless):
   Base state dir: $HOME/.config/termux-dashboard/
   Last project:   $HOME/.config/termux-dashboard/last_project
   Last script:    $HOME/.config/termux-dashboard/last_script
   Recent projects:$HOME/.config/termux-dashboard/recent_projects
   Recent scripts: $HOME/.config/termux-dashboard/recent_scripts
 
-Pinned files (user-local, not repo-canonical):
+Editable pin config files (.txt, user-local, not repo-canonical):
   Projects: $HOME/.config/termux-dashboard/pinned-projects.txt
   Scripts:  $HOME/.config/termux-dashboard/pinned-scripts.txt
 
