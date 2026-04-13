@@ -50,6 +50,33 @@ For alpha testing, copy `scripts/termux-dashboard` into your Termux widget short
 
 A more public installer path may come later if there is demand.
 
+## Manual install (alpha)
+
+Current public installation is manual.
+
+Requirements:
+- Termux
+- tmux
+- Termux:Widget
+
+Basic flow:
+1. Clone this repo into your Termux home directory.
+2. Copy `scripts/termux-dashboard` into your Termux widget shortcuts path.
+3. Make the copied script executable.
+4. Refresh the Termux widget list and launch `termux-dashboard`.
+
+Example commands:
+```sh
+cd ~
+git clone https://github.com/i-schuyler/termux-dashboard.git
+chmod +x ~/termux-dashboard/scripts/termux-dashboard
+mkdir -p ~/.shortcuts
+cp ~/termux-dashboard/scripts/termux-dashboard ~/.shortcuts/termux-dashboard
+chmod +x ~/.shortcuts/termux-dashboard
+```
+
+A more public installer path may come later if there is demand.
+
 ## Repo layout
 
 - `scripts/termux-dashboard` — dashboard launcher and window flows.
