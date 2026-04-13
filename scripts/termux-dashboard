@@ -11,10 +11,14 @@ RECENT_PROJECTS_FILE="$CONFIG_DIR/recent_projects"
 RECENT_SCRIPTS_FILE="$CONFIG_DIR/recent_scripts"
 PINNED_PROJECTS_FILE="$CONFIG_DIR/pinned-projects.txt"
 PINNED_SCRIPTS_FILE="$CONFIG_DIR/pinned-scripts.txt"
+ALIVENESS_ENABLED_FILE="$CONFIG_DIR/aliveness_enabled"
+ALIVENESS_NOTE_DIR_FILE="$CONFIG_DIR/aliveness_note_dir"
 PINNED_DISPLAY_LIMIT=5
 RECENT_DISPLAY_LIMIT=5
 DEFAULT_PROJECTS_DIR="$HOME/projects"
 DEFAULT_BIN_DIR="$HOME/bin"
+DEFAULT_ALIVENESS_NOTE_DIR="/storage/emulated/0/Documents"
+ALIVENESS_NOTE_FILENAME="termux-dashboard-aliveness.md"
 
 resolve_script_path() {
   local source_path="${BASH_SOURCE[0]}"
@@ -63,6 +67,213 @@ read_yes_no_default_no() {
       return 1
       ;;
   esac
+}
+
+trim_whitespace() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s\n' "$value"
+}
+
+read_config_value() {
+  local file_path="$1"
+
+  if [ ! -f "$file_path" ]; then
+    return 1
+  fi
+
+  local value
+  value="$(head -n 1 "$file_path" 2>/dev/null || true)"
+  value="$(trim_whitespace "$value")"
+  printf '%s\n' "$value"
+}
+
+aliveness_window_enabled() {
+  local configured_value
+  configured_value="$(read_config_value "$ALIVENESS_ENABLED_FILE" 2>/dev/null || true)"
+
+  if [ -z "$configured_value" ]; then
+    return 0
+  fi
+
+  configured_value="$(printf '%s' "$configured_value" | tr '[:upper:]' '[:lower:]')"
+  case "$configured_value" in
+    0|false|no|disabled)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+read_optional_prompt() {
+  local prompt_text="$1"
+  local response=""
+
+  if ! read -r -p "$prompt_text " response; then
+    response=""
+  fi
+
+  printf '%s\n' "$response"
+}
+
+save_note_enabled_default_yes() {
+  local save_reply="$1"
+  local normalized
+
+  normalized="$(trim_whitespace "$save_reply")"
+  normalized="$(printf '%s' "$normalized" | tr '[:upper:]' '[:lower:]')"
+
+  case "$normalized" in
+    n|no|0|false)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+prompt_path_with_default() {
+  local prompt_text="$1"
+  local default_path="$2"
+  local user_input=""
+
+  if [ -t 0 ] && [ -t 1 ]; then
+    if ! read -r -e -i "$default_path" -p "$prompt_text " user_input; then
+      return 1
+    fi
+  else
+    if ! read -r -p "$prompt_text " user_input; then
+      return 1
+    fi
+  fi
+
+  if [ -z "$user_input" ]; then
+    user_input="$default_path"
+  fi
+
+  user_input="$(expand_tilde_path "$user_input")"
+  printf '%s\n' "$user_input"
+}
+
+resolve_aliveness_note_dir_for_write() {
+  local configured_note_dir=""
+  configured_note_dir="$(read_config_value "$ALIVENESS_NOTE_DIR_FILE" 2>/dev/null || true)"
+
+  local candidate="$configured_note_dir"
+  if [ -z "$candidate" ]; then
+    if ! candidate="$(prompt_path_with_default "Aliveness note directory (Enter for default: $DEFAULT_ALIVENESS_NOTE_DIR):" "$DEFAULT_ALIVENESS_NOTE_DIR")"; then
+      return 1
+    fi
+  fi
+
+  while true; do
+    if [ -z "$candidate" ]; then
+      candidate="$DEFAULT_ALIVENESS_NOTE_DIR"
+    fi
+
+    candidate="$(expand_tilde_path "$candidate")"
+    if mkdir -p "$candidate" 2>/dev/null && [ -d "$candidate" ]; then
+      printf '%s\n' "$candidate" > "$ALIVENESS_NOTE_DIR_FILE"
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+
+    echo "Aliveness note directory unavailable: $candidate"
+    if ! candidate="$(prompt_path_with_default "Enter replacement aliveness note directory (Enter for default: $DEFAULT_ALIVENESS_NOTE_DIR):" "$DEFAULT_ALIVENESS_NOTE_DIR")"; then
+      return 1
+    fi
+  done
+}
+
+build_aliveness_entry() {
+  local alive_answer="$1"
+  local alive_score="$2"
+  local drain_answer="$3"
+  local drain_score="$4"
+  local timestamp
+  timestamp="$(date '+%Y-%m-%d %H:%M:%S %z')"
+
+  printf '## %s\n' "$timestamp"
+  if [ -n "$alive_answer" ]; then
+    printf -- '- What made me feel most alive today ?: %s\n' "$alive_answer"
+  fi
+  if [ -n "$alive_score" ]; then
+    printf -- '- Aliveness score (1–10): %s\n' "$alive_score"
+  fi
+  if [ -n "$drain_answer" ]; then
+    printf -- '- What drained my aliveness today?: %s\n' "$drain_answer"
+  fi
+  if [ -n "$drain_score" ]; then
+    printf -- '- Drain score (1–10): %s\n' "$drain_score"
+  fi
+  printf '\n'
+}
+
+prepend_file_content() {
+  local file_path="$1"
+  local new_content="$2"
+  local temp_file
+  temp_file="$(mktemp "${TMPDIR:-/tmp}/termux-dashboard-aliveness.XXXXXX")"
+
+  printf '%s' "$new_content" > "$temp_file"
+  if [ -f "$file_path" ]; then
+    cat "$file_path" >> "$temp_file"
+  fi
+
+  mv "$temp_file" "$file_path"
+}
+
+finalize_aliveness_window_handoff() {
+  if [ -z "${TMUX:-}" ]; then
+    return
+  fi
+
+  tmux select-window -t "$SESSION_NAME:Current Project Window" >/dev/null 2>&1 || true
+  tmux kill-window -t "$SESSION_NAME:Aliveness Window" >/dev/null 2>&1 || true
+  tmux select-window -t "$SESSION_NAME:Current Project Window" >/dev/null 2>&1 || true
+}
+
+aliveness_window_flow() {
+  mkdir -p "$CONFIG_DIR"
+
+  local alive_answer
+  alive_answer="$(read_optional_prompt "What made me feel most alive today ?")"
+
+  local alive_score
+  alive_score="$(read_optional_prompt "Aliveness score (1–10):")"
+
+  local drain_answer
+  drain_answer="$(read_optional_prompt "What drained my aliveness today?")"
+
+  local drain_score
+  drain_score="$(read_optional_prompt "Drain score (1–10):")"
+
+  local save_reply
+  save_reply="$(read_optional_prompt "Save note y/n (default: yes)?")"
+
+  local wrote_entry=0
+  if save_note_enabled_default_yes "$save_reply"; then
+    if [ -n "$alive_answer" ] || [ -n "$alive_score" ] || [ -n "$drain_answer" ] || [ -n "$drain_score" ]; then
+      local note_dir=""
+      if note_dir="$(resolve_aliveness_note_dir_for_write)"; then
+        local note_path="$note_dir/$ALIVENESS_NOTE_FILENAME"
+        local entry
+        entry="$(build_aliveness_entry "$alive_answer" "$alive_score" "$drain_answer" "$drain_score")"
+        prepend_file_content "$note_path" "$entry"
+        wrote_entry=1
+      fi
+    fi
+  fi
+
+  if [ "$wrote_entry" -eq 1 ]; then
+    echo "Aliveness captured."
+  fi
+
+  finalize_aliveness_window_handoff
 }
 
 resolve_existing_dir() {
@@ -961,6 +1172,7 @@ termux-dashboard
 Usage:
   termux-dashboard
   termux-dashboard --current-project-window
+  termux-dashboard --aliveness-window
   termux-dashboard --projects-window
   termux-dashboard --new-window
   termux-dashboard --scripts-window
@@ -968,6 +1180,7 @@ Usage:
   termux-dashboard help
 
 Windows:
+  Aliveness Window        Optional startup prompts for an aliveness journal entry.
   Current Project Window  Select a project, run git status/cleanup/pull gating, land in selected repo.
   Projects Window         Open configured projects directory.
   New Window              Repeatable launcher for another Current Project Window flow.
@@ -979,6 +1192,8 @@ Internal state files (extensionless):
   Last script:    $HOME/.config/termux-dashboard/last_script
   Recent projects:$HOME/.config/termux-dashboard/recent_projects
   Recent scripts: $HOME/.config/termux-dashboard/recent_scripts
+  Aliveness enabled toggle: $HOME/.config/termux-dashboard/aliveness_enabled
+  Aliveness note dir:       $HOME/.config/termux-dashboard/aliveness_note_dir
 
 Editable pin config files (.txt, user-local, not repo-canonical):
   Projects: $HOME/.config/termux-dashboard/pinned-projects.txt
@@ -1019,6 +1234,11 @@ launch_dashboard() {
   mkdir -p "$CONFIG_DIR"
 
   if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    local aliveness_is_enabled=0
+    if aliveness_window_enabled; then
+      aliveness_is_enabled=1
+    fi
+
     local current_project_window_dir
     current_project_window_dir="$(startup_dir_for "$DEFAULT_PROJECTS_DIR")"
 
@@ -1034,7 +1254,14 @@ launch_dashboard() {
     local current_project_handoff_command
     current_project_handoff_command="$(current_project_window_shell_handoff_command)"
 
-    tmux new-session -d -s "$SESSION_NAME" -c "$current_project_window_dir" -n "Current Project Window" "$current_project_handoff_command"
+    if [ "$aliveness_is_enabled" -eq 1 ]; then
+      tmux new-session -d -s "$SESSION_NAME" -c "$SCRIPT_DIR" -n "Aliveness Window"
+      tmux send-keys -t "$SESSION_NAME:Aliveness Window" "bash \"$SCRIPT_PATH\" --aliveness-window" C-m
+
+      tmux new-window -t "$SESSION_NAME:" -n "Current Project Window" -c "$current_project_window_dir" "$current_project_handoff_command"
+    else
+      tmux new-session -d -s "$SESSION_NAME" -c "$current_project_window_dir" -n "Current Project Window" "$current_project_handoff_command"
+    fi
 
     tmux new-window -t "$SESSION_NAME:" -n "Projects Window" -c "$projects_window_dir"
     tmux send-keys -t "$SESSION_NAME:Projects Window" "bash \"$SCRIPT_PATH\" --projects-window" C-m
@@ -1045,7 +1272,9 @@ launch_dashboard() {
     tmux new-window -t "$SESSION_NAME:" -n "Scripts Window" -c "$scripts_window_dir"
     tmux send-keys -t "$SESSION_NAME:Scripts Window" "bash \"$SCRIPT_PATH\" --scripts-window" C-m
 
-    tmux select-window -t "$SESSION_NAME:Current Project Window"
+    if [ "$aliveness_is_enabled" -eq 0 ]; then
+      tmux select-window -t "$SESSION_NAME:Current Project Window"
+    fi
   fi
 
   if [ "${TERMUX_DASHBOARD_NO_ATTACH:-0}" = "1" ]; then
@@ -1061,6 +1290,9 @@ case "${1:-}" in
     ;;
   --current-project-window)
     current_project_window_flow
+    ;;
+  --aliveness-window)
+    aliveness_window_flow
     ;;
   --projects-window)
     projects_window_flow
