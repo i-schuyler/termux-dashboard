@@ -12,15 +12,24 @@ Status: docs anchor only for later implementation slices.
 
 ## tmux window contract
 
-The dashboard session uses exactly 4 windows in this exact order:
+When `Aliveness Window` is enabled, the dashboard session uses exactly 5 windows in this exact order:
+
+1. `Aliveness Window`
+2. `Current Project Window`
+3. `Projects Window`
+4. `New Window`
+5. `Scripts Window`
+
+When `Aliveness Window` is disabled, the dashboard session uses exactly 4 windows in this exact order:
 
 1. `Current Project Window`
 2. `Projects Window`
 3. `New Window`
 4. `Scripts Window`
 
-`Current Project Window` is shown first.
+`Aliveness Window` is shown first on fresh session creation only when enabled.
 
+- On reattach, preserve the current tmux state instead of forcing `Aliveness Window` or `Current Project Window`.
 - Help is exposed as a command (for example, a menu option or CLI flag), not as a dedicated tmux window.
 
 ## Prompt contract (approved copy)
@@ -34,6 +43,35 @@ The dashboard session uses exactly 4 windows in this exact order:
 - Scripts menu must show `Pinned` and `Recent` blocks first, then provide a selectable `Show full list` option.
 - Scripts prompt should be self-describing and mirror the clarity of the pkg-update question.
 - Script selection flow mirrors project selection flow: default view shows only `Pinned` and `Recent` blocks with a selectable full-list reveal, full-list view includes all executable scripts in scope, and default selection remains the last-selected script when valid.
+
+## Aliveness Window contract
+
+`Aliveness Window` runs only on fresh session creation, not on reattach.
+
+Prompt flow (asked one after another in this exact order):
+
+1. `What made me feel most alive today ?`
+2. `Aliveness score (1–10):`
+3. `What drained my aliveness today?`
+4. `Drain score (1–10):`
+5. `Save note y/n (default: yes)?`
+
+Rules:
+
+- Each prompt is optional; pressing Enter skips that answer.
+- The `Save note` prompt defaults to `yes`.
+- A single timestamp is recorded once per entry, not once per question.
+- New entries are prepended to the journal file.
+- If all journal-answer fields are blank/skipped, no new entry is written.
+- The journal is written directly to the configured aliveness-note directory; no mirror/copy flow is used.
+- The default aliveness-note directory is `/storage/emulated/0/Documents`.
+- The default note filename is `termux-dashboard-aliveness.md`.
+- On first path setup, the directory prompt should be prefilled with `/storage/emulated/0/Documents` so the user can edit the tail of the path instead of retyping the whole prefix.
+- Directory setup should be asked only when an entry exists, the user chose to save it, and no custom aliveness-note directory has been set yet.
+- At first-time directory setup, pressing Enter accepts `/storage/emulated/0/Documents` as-is.
+- After the final prompt, focus must move to `Current Project Window`.
+- `Aliveness Window` should not remain the active working window after the prompt flow completes.
+- Print `Aliveness captured.` only when an entry was written.
 
 ## Window behavior
 
@@ -55,6 +93,10 @@ The dashboard session uses exactly 4 windows in this exact order:
 - `Projects Window` opens the configured projects path (default `~/projects`), never plain `~`.
 - `New Window` is repeatable and mirrors the `Current Project Window` flow, including the same repo-status summary behavior, stale-branch cleanup, pull-gating, and working-directory guarantees.
 - `Scripts Window` lists scripts from `~/bin`; default runs last-used script; startup/fallback/`Exit` path is the configured scripts path (default `~/bin`), never plain `~`.
+- `Aliveness Window` is a startup prompt window, not a persistent workspace window.
+- After the aliveness prompt flow completes, dashboard focus moves to `Current Project Window`.
+- `Aliveness Window` must not interrupt normal reattach behavior.
+- When `Aliveness Window` is disabled, dashboard startup must use the 4-window layout and must not create a hidden or inert aliveness window.
 
 ## Safety and state
 
@@ -75,6 +117,12 @@ The dashboard session uses exactly 4 windows in this exact order:
 - Missing/nonexistent pinned entries are skipped.
 - Help command output should print the exact pinned-file paths so users can edit them quickly.
 - Naming convention: only pinned config files use `.txt`; recent/last internal state files are extensionless.
+- User-local config may include an enabled/disabled toggle for `Aliveness Window`.
+- When `Aliveness Window` is disabled, the tmux session must omit that window entirely.
+- User-local config may include an editable aliveness-note directory.
+- Default aliveness-note directory: `/storage/emulated/0/Documents`
+- Default aliveness note filename: `termux-dashboard-aliveness.md`
+- The aliveness-note directory is user-local config/state and should persist across reinstalls when the user config directory is preserved.
 
 ## Runtime discovery guidance
 

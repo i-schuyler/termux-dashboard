@@ -361,6 +361,31 @@ test_tmux_pane_cwd_handoff() {
   tmux_exec "$tmux_tmpdir" kill-session -t "termux-dashboard" >/dev/null 2>&1 || true
 }
 
+test_aliveness_window_disabled_omits_window() {
+  local root
+  root="$(new_temp_root)"
+
+  local home_dir="$root/home"
+  mkdir -p "$home_dir/projects" "$home_dir/bin" "$home_dir/.config/termux-dashboard"
+
+  cat > "$home_dir/.config/termux-dashboard/config.env" <<'EOF'
+TERMUX_DASHBOARD_ALIVENESS_WINDOW_ENABLED=0
+EOF
+
+  local tmux_tmpdir="$root/tmux"
+  mkdir -p "$tmux_tmpdir"
+
+  env -u TMUX HOME="$home_dir" TMUX_TMPDIR="$tmux_tmpdir" TERMUX_DASHBOARD_NO_ATTACH=1 bash "$DASHBOARD_SCRIPT"
+  wait_for_tmux_session "$tmux_tmpdir" "termux-dashboard"
+
+  local windows_output
+  windows_output="$(tmux_exec "$tmux_tmpdir" list-windows -t "termux-dashboard" -F '#{window_name}')"
+
+  assert_not_contains "$windows_output" "Aliveness Window" "aliveness window disabled contract"
+
+  tmux_exec "$tmux_tmpdir" kill-session -t "termux-dashboard" >/dev/null 2>&1 || true
+}
+
 main() {
   require_commands bash git tmux mktemp
 
@@ -374,6 +399,7 @@ main() {
   run_test "behind-only pull gating" test_behind_only_pull_gating
   run_test "zero eligible stale branches" test_zero_eligible_stale_branches
   run_test "tmux pane cwd handoff" test_tmux_pane_cwd_handoff
+  run_test "aliveness window disabled omits window" test_aliveness_window_disabled_omits_window
 
   log "Completed $PASS_COUNT smoke checks"
 }
