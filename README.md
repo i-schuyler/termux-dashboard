@@ -27,10 +27,13 @@ Using Termux seriously on Android is powerful, but getting back into the right r
 ## What it does
 
 - Starts from the `termux-dashboard` shortcut entry point.
-- Creates or reattaches a tmux session with a fixed 4-window flow.
+- Creates or reattaches a tmux session with an optional `Aliveness Window` startup (5 windows when enabled, 4 when disabled).
+- Writes aliveness journal entries directly to a configurable note directory.
 - Opens project and script menus with pinned/recent-first selection.
 - Uses git-aware pull gating (prompt only when default branch is behind remote).
 - Keeps repo/runtime behavior source-of-truth in this repository.
+
+`Aliveness Window` is optional and controlled by user-local config.
 
 ## Repo scope
 
