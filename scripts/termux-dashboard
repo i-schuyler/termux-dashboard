@@ -195,17 +195,19 @@ build_aliveness_entry() {
   local drain_answer="$3"
   local drain_score="$4"
   local timestamp
-  timestamp="$(date '+%Y-%m-%d %H:%M:%S %z')"
+  timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
 
   printf '## %s\n' "$timestamp"
   if [ -n "$alive_answer" ]; then
-    printf -- '- What made me feel most alive today ?: %s\n' "$alive_answer"
+    printf '### What made me feel most alive today?\n'
+    printf '%s\n' "$alive_answer"
   fi
   if [ -n "$alive_score" ]; then
     printf -- '- Aliveness score (1–10): %s\n' "$alive_score"
   fi
   if [ -n "$drain_answer" ]; then
-    printf -- '- What drained my aliveness today?: %s\n' "$drain_answer"
+    printf '### What drained my aliveness today?\n'
+    printf '%s\n' "$drain_answer"
   fi
   if [ -n "$drain_score" ]; then
     printf -- '- Drain score (1–10): %s\n' "$drain_score"
@@ -219,7 +221,7 @@ prepend_file_content() {
   local temp_file
   temp_file="$(mktemp "${TMPDIR:-/tmp}/termux-dashboard-aliveness.XXXXXX")"
 
-  printf '%s' "$new_content" > "$temp_file"
+  printf '%s\n\n' "$new_content" > "$temp_file"
   if [ -f "$file_path" ]; then
     cat "$file_path" >> "$temp_file"
   fi
@@ -1272,7 +1274,9 @@ launch_dashboard() {
     tmux new-window -t "$SESSION_NAME:" -n "Scripts Window" -c "$scripts_window_dir"
     tmux send-keys -t "$SESSION_NAME:Scripts Window" "bash \"$SCRIPT_PATH\" --scripts-window" C-m
 
-    if [ "$aliveness_is_enabled" -eq 0 ]; then
+    if [ "$aliveness_is_enabled" -eq 1 ]; then
+      tmux select-window -t "$SESSION_NAME:Aliveness Window"
+    else
       tmux select-window -t "$SESSION_NAME:Current Project Window"
     fi
   fi

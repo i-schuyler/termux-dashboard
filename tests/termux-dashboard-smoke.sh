@@ -420,10 +420,25 @@ test_aliveness_write_flow() {
 
   local note_contents
   note_contents="$(cat "$note_file")"
-  assert_contains "$note_contents" "What made me feel most alive today ?: Shipped real work" "aliveness write flow"
+
+  local first_line
+  first_line="$(sed -n '1p' "$note_file")"
+  if [[ ! "$first_line" =~ ^##\ [0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+    fail "aliveness write flow timestamp format mismatch: $first_line"
+  fi
+
+  assert_contains "$note_contents" $'### What made me feel most alive today?\nShipped real work' "aliveness write flow"
   assert_contains "$note_contents" "Aliveness score (1–10): 8" "aliveness write flow"
-  assert_contains "$note_contents" "What drained my aliveness today?: Long context switching" "aliveness write flow"
+  assert_contains "$note_contents" $'### What drained my aliveness today?\nLong context switching' "aliveness write flow"
   assert_contains "$note_contents" "Drain score (1–10): 4" "aliveness write flow"
+  assert_not_contains "$note_contents" "What made me feel most alive today ?:" "aliveness write flow"
+
+  local trailing_hex
+  trailing_hex="$(tail -c 2 "$note_file" | od -An -t x1 | tr -d '[:space:]')"
+  if [ "$trailing_hex" != "0a0a" ]; then
+    fail "aliveness write flow missing final blank line"
+  fi
+
   assert_contains "$output" "Aliveness captured." "aliveness write flow"
 }
 
@@ -460,6 +475,7 @@ test_aliveness_window_handoff_cleanup() {
   env -u TMUX HOME="$home_dir" TMUX_TMPDIR="$tmux_tmpdir" TERMUX_DASHBOARD_NO_ATTACH=1 bash "$DASHBOARD_SCRIPT"
   wait_for_tmux_session "$tmux_tmpdir" "termux-dashboard"
   wait_for_pane_text "$tmux_tmpdir" "$aliveness_pane_target" "What made me feel most alive today ?"
+  wait_for_selected_window "$tmux_tmpdir" "termux-dashboard" "Aliveness Window"
 
   local enter_count
   for enter_count in 1 2 3 4 5; do
@@ -491,6 +507,7 @@ test_aliveness_window_disabled_omits_window() {
 
   env -u TMUX HOME="$home_dir" TMUX_TMPDIR="$tmux_tmpdir" TERMUX_DASHBOARD_NO_ATTACH=1 bash "$DASHBOARD_SCRIPT"
   wait_for_tmux_session "$tmux_tmpdir" "termux-dashboard"
+  wait_for_selected_window "$tmux_tmpdir" "termux-dashboard" "Current Project Window"
 
   local windows_output
   windows_output="$(tmux_exec "$tmux_tmpdir" list-windows -t "termux-dashboard" -F '#{window_name}')"
