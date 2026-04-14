@@ -170,6 +170,42 @@ wait_for_pane_cwd() {
   fail "pane cwd mismatch for $pane_target (expected: $expected_path, actual: ${current_path:-<empty>})\nObserved pane output:\n$pane_output"
 }
 
+wait_for_window_absent() {
+  local tmux_tmpdir="$1"
+  local session_name="$2"
+  local window_name="$3"
+  local attempt
+  local windows_output
+
+  for attempt in $(seq 1 80); do
+    windows_output="$(tmux_exec "$tmux_tmpdir" list-windows -t "$session_name" -F '#{window_name}' 2>/dev/null || true)"
+    if [[ "$windows_output" != *"$window_name"* ]]; then
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  fail "window was not removed from $session_name: $window_name\nObserved windows:\n$windows_output"
+}
+
+wait_for_selected_window() {
+  local tmux_tmpdir="$1"
+  local session_name="$2"
+  local expected_window_name="$3"
+  local attempt
+  local selected_window
+
+  for attempt in $(seq 1 80); do
+    selected_window="$(tmux_exec "$tmux_tmpdir" display-message -p -t "$session_name" '#{window_name}' 2>/dev/null || true)"
+    if [ "$selected_window" = "$expected_window_name" ]; then
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  fail "session did not select expected window (expected: $expected_window_name, actual: ${selected_window:-<empty>})"
+}
+
 run_test() {
   local name="$1"
   shift
@@ -188,10 +224,13 @@ test_help_output() {
 
   assert_contains "$output" "Usage:" "help output"
   assert_contains "$output" "termux-dashboard --current-project-window" "help output"
+  assert_contains "$output" "termux-dashboard --aliveness-window" "help output"
   assert_contains "$output" "Internal state files (extensionless):" "help output"
   assert_contains "$output" 'Recent projects:$HOME/.config/termux-dashboard/recent_projects' "help output"
   assert_contains "$output" 'Recent scripts: $HOME/.config/termux-dashboard/recent_scripts' "help output"
   assert_contains "$output" 'Last project:   $HOME/.config/termux-dashboard/last_project' "help output"
+  assert_contains "$output" 'Aliveness enabled toggle: $HOME/.config/termux-dashboard/aliveness_enabled' "help output"
+  assert_contains "$output" 'Aliveness note dir:       $HOME/.config/termux-dashboard/aliveness_note_dir' "help output"
   assert_contains "$output" 'Projects: $HOME/.config/termux-dashboard/pinned-projects.txt' "help output"
   assert_contains "$output" "Editable pin config files (.txt, user-local, not repo-canonical):" "help output"
 }
@@ -330,6 +369,8 @@ test_tmux_pane_cwd_handoff() {
   local pane_target="termux-dashboard:Current Project Window"
   mkdir -p "$tmux_tmpdir"
 
+  printf '0\n' > "$home_dir/.config/termux-dashboard/aliveness_enabled"
+
   printf '%s\n' "$project_name" > "$home_dir/.config/termux-dashboard/last_project"
 
   env -u TMUX HOME="$home_dir" TMUX_TMPDIR="$tmux_tmpdir" TERMUX_DASHBOARD_NO_ATTACH=1 bash "$DASHBOARD_SCRIPT"
@@ -361,6 +402,81 @@ test_tmux_pane_cwd_handoff() {
   tmux_exec "$tmux_tmpdir" kill-session -t "termux-dashboard" >/dev/null 2>&1 || true
 }
 
+test_aliveness_write_flow() {
+  local home_dir
+  home_dir="$(new_test_home)"
+
+  local note_dir="$home_dir/aliveness-notes"
+  mkdir -p "$note_dir"
+  printf '%s\n' "$note_dir" > "$home_dir/.config/termux-dashboard/aliveness_note_dir"
+
+  local output
+  output="$(printf 'Shipped real work\n8\nLong context switching\n4\ny\n' | HOME="$home_dir" bash "$DASHBOARD_SCRIPT" --aliveness-window 2>&1)"
+
+  local note_file="$note_dir/termux-dashboard-aliveness.md"
+  if [ ! -f "$note_file" ]; then
+    fail "aliveness write flow did not create note file"
+  fi
+
+  local note_contents
+  note_contents="$(cat "$note_file")"
+  assert_contains "$note_contents" "What made me feel most alive today ?: Shipped real work" "aliveness write flow"
+  assert_contains "$note_contents" "Aliveness score (1–10): 8" "aliveness write flow"
+  assert_contains "$note_contents" "What drained my aliveness today?: Long context switching" "aliveness write flow"
+  assert_contains "$note_contents" "Drain score (1–10): 4" "aliveness write flow"
+  assert_contains "$output" "Aliveness captured." "aliveness write flow"
+}
+
+test_aliveness_all_skipped_no_write() {
+  local home_dir
+  home_dir="$(new_test_home)"
+
+  local note_dir="$home_dir/aliveness-notes"
+  mkdir -p "$note_dir"
+  printf '%s\n' "$note_dir" > "$home_dir/.config/termux-dashboard/aliveness_note_dir"
+
+  local output
+  output="$(printf '\n\n\n\n\n' | HOME="$home_dir" bash "$DASHBOARD_SCRIPT" --aliveness-window 2>&1)"
+
+  local note_file="$note_dir/termux-dashboard-aliveness.md"
+  if [ -f "$note_file" ]; then
+    fail "all-skipped aliveness flow unexpectedly wrote a note file"
+  fi
+
+  assert_not_contains "$output" "Aliveness captured." "all-skipped aliveness flow"
+}
+
+test_aliveness_window_handoff_cleanup() {
+  local root
+  root="$(new_temp_root)"
+
+  local home_dir="$root/home"
+  mkdir -p "$home_dir/projects/demo" "$home_dir/bin" "$home_dir/.config/termux-dashboard"
+
+  local tmux_tmpdir="$root/tmux"
+  local aliveness_pane_target="termux-dashboard:Aliveness Window"
+  mkdir -p "$tmux_tmpdir"
+
+  env -u TMUX HOME="$home_dir" TMUX_TMPDIR="$tmux_tmpdir" TERMUX_DASHBOARD_NO_ATTACH=1 bash "$DASHBOARD_SCRIPT"
+  wait_for_tmux_session "$tmux_tmpdir" "termux-dashboard"
+  wait_for_pane_text "$tmux_tmpdir" "$aliveness_pane_target" "What made me feel most alive today ?"
+
+  local enter_count
+  for enter_count in 1 2 3 4 5; do
+    tmux_exec "$tmux_tmpdir" send-keys -t "$aliveness_pane_target" C-m
+    sleep 0.1
+  done
+
+  wait_for_window_absent "$tmux_tmpdir" "termux-dashboard" "Aliveness Window"
+  wait_for_selected_window "$tmux_tmpdir" "termux-dashboard" "Current Project Window"
+
+  local windows_output
+  windows_output="$(tmux_exec "$tmux_tmpdir" list-windows -t "termux-dashboard" -F '#{window_name}')"
+  assert_not_contains "$windows_output" "Aliveness Window" "aliveness window handoff cleanup"
+
+  tmux_exec "$tmux_tmpdir" kill-session -t "termux-dashboard" >/dev/null 2>&1 || true
+}
+
 test_aliveness_window_disabled_omits_window() {
   local root
   root="$(new_temp_root)"
@@ -368,9 +484,7 @@ test_aliveness_window_disabled_omits_window() {
   local home_dir="$root/home"
   mkdir -p "$home_dir/projects" "$home_dir/bin" "$home_dir/.config/termux-dashboard"
 
-  cat > "$home_dir/.config/termux-dashboard/config.env" <<'EOF'
-TERMUX_DASHBOARD_ALIVENESS_WINDOW_ENABLED=0
-EOF
+  printf '0\n' > "$home_dir/.config/termux-dashboard/aliveness_enabled"
 
   local tmux_tmpdir="$root/tmux"
   mkdir -p "$tmux_tmpdir"
@@ -399,6 +513,9 @@ main() {
   run_test "behind-only pull gating" test_behind_only_pull_gating
   run_test "zero eligible stale branches" test_zero_eligible_stale_branches
   run_test "tmux pane cwd handoff" test_tmux_pane_cwd_handoff
+  run_test "aliveness direct write flow" test_aliveness_write_flow
+  run_test "aliveness all-skipped no-write" test_aliveness_all_skipped_no_write
+  run_test "aliveness window handoff cleanup" test_aliveness_window_handoff_cleanup
   run_test "aliveness window disabled omits window" test_aliveness_window_disabled_omits_window
 
   log "Completed $PASS_COUNT smoke checks"
