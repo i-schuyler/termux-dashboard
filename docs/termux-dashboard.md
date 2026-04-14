@@ -72,6 +72,25 @@ Rules:
 - After the final prompt, focus must move to `Current Project Window`.
 - `Aliveness Window` should not remain the active working window after the prompt flow completes.
 - Print `Aliveness captured.` only when an entry was written.
+- Timestamp format must be `YYYY-MM-DD HH:MM:SS` with no timezone suffix.
+- For the two long-form questions, use Markdown `###` headings with no trailing colon:
+  - `### What made me feel most alive today?`
+  - `### What drained my aliveness today?`
+- For the two long-form questions, write the answer on the next line below the heading.
+- Keep the score fields as Markdown list items:
+  - `- Aliveness score (1–10): <value>`
+  - `- Drain score (1–10): <value>`
+- Only include answered fields in the entry body.
+- End each written entry with a blank line after the final body line.
+- Example entry format:
+
+## 2026-04-13 19:16:35
+### What made me feel most alive today?
+test
+- Aliveness score (1–10): 5
+### What drained my aliveness today?
+test
+- Drain score (1–10): 5
 
 ## Window behavior
 
