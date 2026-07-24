@@ -27,9 +27,10 @@ Using Termux seriously on Android is powerful, but getting back into the right r
 ## What it does
 
 - Starts from the `termux-dashboard` shortcut entry point.
-- Creates or reattaches a tmux session with an optional `Aliveness Window` startup (5 windows when enabled, 4 when disabled).
+- Creates or reattaches a tmux session with an optional `Aliveness Window` startup (6 windows when enabled, 5 when disabled).
 - Writes aliveness journal entries directly to a configurable note directory.
 - Opens project and script menus with pinned/recent-first selection.
+- Provides a dedicated `Codex Alerts Window` that controls the installed `crosshost-utils` `codex-alert` command and renders `status --json`.
 - Uses git-aware pull gating (prompt only when default branch is behind remote).
 - Keeps repo/runtime behavior source-of-truth in this repository.
 
