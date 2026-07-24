@@ -126,7 +126,7 @@ The dashboard owns only menu presentation and status summarization. `crosshost-u
 - `Aliveness Window` is a startup prompt window, not a persistent workspace window.
 - After the aliveness prompt flow completes, dashboard focus moves to `Current Project Window`.
 - `Aliveness Window` must not interrupt normal reattach behavior.
-- When `Aliveness Window` is disabled, dashboard startup must use the 4-window layout and must not create a hidden or inert aliveness window.
+- When `Aliveness Window` is disabled, dashboard startup must use the 5-window layout and must not create a hidden or inert aliveness window.
 
 ## Safety and state
 
