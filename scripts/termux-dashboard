@@ -17,6 +17,7 @@ PINNED_DISPLAY_LIMIT=5
 RECENT_DISPLAY_LIMIT=5
 DEFAULT_PROJECTS_DIR="$HOME/projects"
 DEFAULT_BIN_DIR="$HOME/bin"
+DEFAULT_CODEX_ALERT_DIR="$HOME/.local/bin"
 DEFAULT_ALIVENESS_NOTE_DIR="/storage/emulated/0/Documents"
 ALIVENESS_NOTE_FILENAME="termux-dashboard-aliveness.md"
 
@@ -1167,6 +1168,160 @@ scripts_window_flow() {
   fi
 }
 
+resolve_codex_alert_command() {
+  local configured_command="${TERMUX_DASHBOARD_CODEX_ALERT_COMMAND:-}"
+  if [ -n "$configured_command" ] && [ -x "$configured_command" ] && [ ! -d "$configured_command" ]; then
+    printf '%s\n' "$configured_command"
+    return 0
+  fi
+
+  local canonical_command="$HOME/.local/bin/codex-alert"
+  if [ -x "$canonical_command" ] && [ ! -d "$canonical_command" ]; then
+    printf '%s\n' "$canonical_command"
+    return 0
+  fi
+
+  local path_command
+  path_command="$(command -v codex-alert 2>/dev/null || true)"
+  if [ -n "$path_command" ] && [ -x "$path_command" ] && [ ! -d "$path_command" ]; then
+    printf '%s\n' "$path_command"
+    return 0
+  fi
+  return 1
+}
+
+resolve_json_parser() {
+  local parser
+  for parser in python3 python; do
+    if command -v "$parser" >/dev/null 2>&1; then
+      printf '%s\n' "$parser"
+      return 0
+    fi
+  done
+  return 1
+}
+
+render_codex_alert_status() {
+  local codex_alert_command="$1"
+  local status_json status_exit_code
+  set +e
+  status_json="$("$codex_alert_command" status --json)"
+  status_exit_code=$?
+  set -e
+
+  if [ "$status_exit_code" -ne 0 ]; then
+    echo "Status failed (exit $status_exit_code)."
+    return "$status_exit_code"
+  fi
+
+  local json_parser
+  if ! json_parser="$(resolve_json_parser)"; then
+    echo "Status unavailable: no JSON parser found (python3 or python required)."
+    return 1
+  fi
+
+  local rendered_status parser_exit_code
+  set +e
+  rendered_status="$(printf '%s' "$status_json" | "$json_parser" -c '
+import json
+import sys
+try:
+    value = json.load(sys.stdin)
+    if not isinstance(value, dict):
+        raise ValueError("status root is not an object")
+except (json.JSONDecodeError, ValueError):
+    sys.exit(2)
+def display(field, fallback):
+    item = value.get(field)
+    if item is None or item == "":
+        return fallback
+    if isinstance(item, bool):
+        return "enabled" if item else "disabled"
+    return str(item)
+print("Codex alert status")
+print("  State:              " + display("state", "unknown"))
+print("  Mode:               " + display("mode", "unknown"))
+print("  Host:               " + display("host", "unknown"))
+print("  Wake lock:          " + display("wake_lock", "unknown"))
+print("  Timed stop:         " + display("stop_at", "not scheduled"))
+print("  Last notification:  " + display("last_notification_at", "never"))
+print("  Reconnect count:    " + display("reconnect_count", "0"))
+print("  Last error:         " + display("last_error", "none"))
+')"
+  parser_exit_code=$?
+  set -e
+  if [ "$parser_exit_code" -ne 0 ]; then
+    echo "Status unavailable: codex-alert returned malformed JSON."
+    return 1
+  fi
+  printf '%s\n' "$rendered_status"
+}
+
+run_codex_alert_action() {
+  local action_label="$1"
+  shift
+  local codex_alert_command
+  if ! codex_alert_command="$(resolve_codex_alert_command)"; then
+    echo "codex-alert is unavailable."
+    echo "Install it from: https://github.com/i-schuyler/crosshost-utils"
+    return 127
+  fi
+
+  local action_exit_code
+  set +e
+  "$codex_alert_command" "$@"
+  action_exit_code=$?
+  set -e
+  if [ "$action_exit_code" -eq 0 ]; then
+    echo "$action_label completed."
+  else
+    echo "$action_label failed (exit $action_exit_code)."
+  fi
+  return "$action_exit_code"
+}
+
+codex_alerts_window_flow() {
+  local user_choice
+  while true; do
+    cat <<'EOF'
+Codex Alerts
+1) Start
+2) Start — reliable
+3) Start for 4 hours
+4) Stop
+5) Status
+6) Send test alert
+7) Doctor
+8) View logs
+9) Exit
+EOF
+    if ! read -r -p "Codex alerts selection: " user_choice; then
+      return
+    fi
+    case "$user_choice" in
+      1) run_codex_alert_action "Start" start || true ;;
+      2) run_codex_alert_action "Start — reliable" start --reliable || true ;;
+      3) run_codex_alert_action "Start for 4 hours" start --for 4h || true ;;
+      4) run_codex_alert_action "Stop" stop || true ;;
+      5)
+        local codex_alert_command
+        if codex_alert_command="$(resolve_codex_alert_command)"; then
+          render_codex_alert_status "$codex_alert_command" || true
+        else
+          echo "codex-alert is unavailable."
+          echo "Install it from: https://github.com/i-schuyler/crosshost-utils"
+        fi
+        ;;
+      6) run_codex_alert_action "Send test alert" test || true ;;
+      7) run_codex_alert_action "Doctor" doctor || true ;;
+      8) run_codex_alert_action "View logs" logs || true ;;
+      9) return ;;
+      *) echo "Invalid choice. Enter a listed number."; continue ;;
+    esac
+    read -r -p "Press Enter to continue. " _ || return
+  done
+}
+
 print_help() {
   cat <<'EOF'
 termux-dashboard
@@ -1178,6 +1333,7 @@ Usage:
   termux-dashboard --projects-window
   termux-dashboard --new-window
   termux-dashboard --scripts-window
+  termux-dashboard --codex-alerts-window
   termux-dashboard --help
   termux-dashboard help
 
@@ -1187,6 +1343,7 @@ Windows:
   Projects Window         Open configured projects directory.
   New Window              Repeatable launcher for another Current Project Window flow.
   Scripts Window          Select and run executable scripts from configured scripts directory.
+  Codex Alerts Window     Control the installed crosshost-utils codex-alert watcher.
 
 Internal state files (extensionless):
   Base state dir: $HOME/.config/termux-dashboard/
@@ -1253,6 +1410,9 @@ launch_dashboard() {
     local scripts_window_dir
     scripts_window_dir="$(startup_dir_for "$DEFAULT_BIN_DIR")"
 
+    local codex_alerts_window_dir
+    codex_alerts_window_dir="$(startup_dir_for "$DEFAULT_CODEX_ALERT_DIR")"
+
     local current_project_handoff_command
     current_project_handoff_command="$(current_project_window_shell_handoff_command)"
 
@@ -1273,6 +1433,9 @@ launch_dashboard() {
 
     tmux new-window -t "$SESSION_NAME:" -n "Scripts Window" -c "$scripts_window_dir"
     tmux send-keys -t "$SESSION_NAME:Scripts Window" "bash \"$SCRIPT_PATH\" --scripts-window" C-m
+
+    tmux new-window -t "$SESSION_NAME:" -n "Codex Alerts Window" -c "$codex_alerts_window_dir"
+    tmux send-keys -t "$SESSION_NAME:Codex Alerts Window" "bash \"$SCRIPT_PATH\" --codex-alerts-window" C-m
 
     if [ "$aliveness_is_enabled" -eq 1 ]; then
       tmux select-window -t "$SESSION_NAME:Aliveness Window"
@@ -1306,6 +1469,9 @@ case "${1:-}" in
     ;;
   --scripts-window)
     scripts_window_flow
+    ;;
+  --codex-alerts-window)
+    codex_alerts_window_flow
     ;;
   "")
     launch_dashboard
