@@ -92,6 +92,24 @@ EOF
   chmod +x "$target_dir/$script_name"
 }
 
+write_codex_alert_stub() {
+  local target_path="$1"
+  local label="$2"
+  local log_file="$3"
+  mkdir -p "$(dirname "$target_path")"
+  cat > "$target_path" <<EOF
+#!/usr/bin/env bash
+printf '%s|%s\n' '$label' "\$*" >> '$log_file'
+if [ "\${1:-}" = status ] && [ "\${2:-}" = --json ]; then
+  printf '%s\n' "\${CODEX_ALERT_STUB_JSON:-}"
+  exit "\${CODEX_ALERT_STUB_STATUS_EXIT:-0}"
+fi
+printf '%s\n' "stub output: \$*"
+exit "\${CODEX_ALERT_STUB_ACTION_EXIT:-0}"
+EOF
+  chmod +x "$target_path"
+}
+
 set_git_identity() {
   local repo_dir="$1"
   git -C "$repo_dir" config user.name "Smoke Tester"
@@ -225,6 +243,8 @@ test_help_output() {
   assert_contains "$output" "Usage:" "help output"
   assert_contains "$output" "termux-dashboard --current-project-window" "help output"
   assert_contains "$output" "termux-dashboard --aliveness-window" "help output"
+  assert_contains "$output" "termux-dashboard --codex-alerts-window" "help output"
+  assert_contains "$output" "Codex Alerts Window     Control the installed crosshost-utils codex-alert watcher." "help output"
   assert_contains "$output" "Internal state files (extensionless):" "help output"
   assert_contains "$output" 'Recent projects:$HOME/.config/termux-dashboard/recent_projects' "help output"
   assert_contains "$output" 'Recent scripts: $HOME/.config/termux-dashboard/recent_scripts' "help output"
@@ -517,6 +537,149 @@ test_aliveness_window_disabled_omits_window() {
   tmux_exec "$tmux_tmpdir" kill-session -t "termux-dashboard" >/dev/null 2>&1 || true
 }
 
+test_codex_alert_command_resolution() {
+  local home_dir
+  home_dir="$(new_test_home)"
+  local root="${home_dir%/home}"
+  local log_file="$root/codex-alert.log"
+  local override="$root/override/codex-alert"
+  local canonical="$home_dir/.local/bin/codex-alert"
+  local path_dir="$root/path-bin"
+  local path_command="$path_dir/codex-alert"
+
+  write_codex_alert_stub "$override" override "$log_file"
+  write_codex_alert_stub "$canonical" canonical "$log_file"
+  write_codex_alert_stub "$path_command" path "$log_file"
+
+  printf '1\n\n9\n' | HOME="$home_dir" PATH="$path_dir:$PATH" TERMUX_DASHBOARD_CODEX_ALERT_COMMAND="$override" bash "$DASHBOARD_SCRIPT" --codex-alerts-window >/dev/null
+  assert_contains "$(cat "$log_file")" "override|start" "codex-alert override precedence"
+  assert_not_contains "$(cat "$log_file")" "canonical|" "codex-alert override precedence"
+  : > "$log_file"
+
+  printf '1\n\n9\n' | HOME="$home_dir" PATH="$path_dir:$PATH" bash "$DASHBOARD_SCRIPT" --codex-alerts-window >/dev/null
+  assert_contains "$(cat "$log_file")" "canonical|start" "codex-alert canonical precedence"
+  assert_not_contains "$(cat "$log_file")" "path|" "codex-alert canonical precedence"
+  : > "$log_file"
+
+  chmod -x "$canonical"
+  printf '1\n\n9\n' | HOME="$home_dir" PATH="$path_dir:$PATH" bash "$DASHBOARD_SCRIPT" --codex-alerts-window >/dev/null
+  assert_contains "$(cat "$log_file")" "path|start" "codex-alert PATH fallback"
+}
+
+test_codex_alert_actions_and_status() {
+  local home_dir
+  home_dir="$(new_test_home)"
+  local root="${home_dir%/home}"
+  local log_file="$root/codex-alert.log"
+  local stub="$root/stub/codex-alert"
+  write_codex_alert_stub "$stub" stub "$log_file"
+
+  local status_json='{"state":"running","mode":"reliable","host":"vps.example","wake_lock":true,"stop_at":"2026-07-24T15:00:00Z","last_notification_at":"2026-07-24T11:00:00Z","reconnect_count":7,"last_error":"none recorded","unknown_future_field":{"ignored":true}}'
+  local output
+  output="$(printf '0\n1\n\n2\n\n3\n\n4\n\n5\n\n6\n\n7\n\n8\n\n9\n' | HOME="$home_dir" TERMUX_DASHBOARD_CODEX_ALERT_COMMAND="$stub" CODEX_ALERT_STUB_JSON="$status_json" bash "$DASHBOARD_SCRIPT" --codex-alerts-window 2>&1)"
+
+  local calls
+  calls="$(cat "$log_file")"
+  assert_contains "$output" "Invalid choice. Enter a listed number." "codex-alert invalid input"
+  local expected_menu=$'1) Start\n2) Start — reliable\n3) Start for 4 hours\n4) Stop\n5) Status\n6) Send test alert\n7) Doctor\n8) View logs\n9) Exit'
+  assert_contains "$output" "$expected_menu" "codex-alert menu order"
+  assert_contains "$calls" "stub|start" "codex-alert start mapping"
+  assert_contains "$calls" "stub|start --reliable" "codex-alert reliable mapping"
+  assert_contains "$calls" "stub|start --for 4h" "codex-alert timed mapping"
+  assert_contains "$calls" "stub|stop" "codex-alert stop mapping"
+  assert_contains "$calls" "stub|status --json" "codex-alert JSON status mapping"
+  assert_contains "$calls" "stub|test" "codex-alert test mapping"
+  assert_contains "$calls" "stub|doctor" "codex-alert doctor mapping"
+  assert_contains "$calls" "stub|logs" "codex-alert logs mapping"
+  assert_not_contains "$calls" "logs --follow" "codex-alert bounded logs"
+  assert_not_contains "$calls" "boot" "codex-alert scope boundary"
+  assert_not_contains "$calls" "widget" "codex-alert scope boundary"
+  assert_contains "$output" "State:              running" "codex-alert status rendering"
+  assert_contains "$output" "Mode:               reliable" "codex-alert status rendering"
+  assert_contains "$output" "Host:               vps.example" "codex-alert status rendering"
+  assert_contains "$output" "Wake lock:          enabled" "codex-alert status rendering"
+  assert_contains "$output" "Timed stop:         2026-07-24T15:00:00Z" "codex-alert status rendering"
+  assert_contains "$output" "Last notification:  2026-07-24T11:00:00Z" "codex-alert status rendering"
+  assert_contains "$output" "Reconnect count:    7" "codex-alert status rendering"
+  assert_contains "$output" "Last error:         none recorded" "codex-alert status rendering"
+  assert_not_contains "$output" "unknown_future_field" "codex-alert unknown JSON field"
+}
+
+test_codex_alert_safe_failures() {
+  local home_dir
+  home_dir="$(new_test_home)"
+  local root="${home_dir%/home}"
+  local log_file="$root/codex-alert.log"
+  local stub="$root/stub/codex-alert"
+  write_codex_alert_stub "$stub" stub "$log_file"
+
+  local malformed_output
+  malformed_output="$(printf '5\n\n9\n' | HOME="$home_dir" TERMUX_DASHBOARD_CODEX_ALERT_COMMAND="$stub" CODEX_ALERT_STUB_JSON='not-json' bash "$DASHBOARD_SCRIPT" --codex-alerts-window 2>&1)"
+  assert_contains "$malformed_output" "Status unavailable: codex-alert returned malformed JSON." "malformed status JSON"
+
+  local nonzero_output
+  nonzero_output="$(printf '5\n\n9\n' | HOME="$home_dir" TERMUX_DASHBOARD_CODEX_ALERT_COMMAND="$stub" CODEX_ALERT_STUB_JSON='{}' CODEX_ALERT_STUB_STATUS_EXIT=23 bash "$DASHBOARD_SCRIPT" --codex-alerts-window 2>&1)"
+  assert_contains "$nonzero_output" "Status failed (exit 23)." "nonzero status command"
+
+  local action_failure_output
+  action_failure_output="$(printf '1\n\n9\n' | HOME="$home_dir" TERMUX_DASHBOARD_CODEX_ALERT_COMMAND="$stub" CODEX_ALERT_STUB_ACTION_EXIT=17 bash "$DASHBOARD_SCRIPT" --codex-alerts-window 2>&1)"
+  assert_contains "$action_failure_output" "Start failed (exit 17)." "nonzero action command"
+
+  local missing_home
+  missing_home="$(new_test_home)"
+  local missing_output
+  missing_output="$(printf '1\n\n9\n' | HOME="$missing_home" PATH="${PATH//:$root\/stub/}" bash "$DASHBOARD_SCRIPT" --codex-alerts-window 2>&1)"
+  assert_contains "$missing_output" "codex-alert is unavailable." "missing codex-alert"
+  assert_contains "$missing_output" "https://github.com/i-schuyler/crosshost-utils" "missing codex-alert install source"
+}
+
+test_codex_alert_tmux_layout_and_reattach() {
+  local root
+  root="$(new_temp_root)"
+  local home_dir="$root/home"
+  mkdir -p "$home_dir/projects" "$home_dir/bin" "$home_dir/.local/bin" "$home_dir/.config/termux-dashboard"
+  local tmux_tmpdir="$root/tmux"
+  mkdir -p "$tmux_tmpdir"
+
+  env -u TMUX HOME="$home_dir" TMUX_TMPDIR="$tmux_tmpdir" TERMUX_DASHBOARD_NO_ATTACH=1 bash "$DASHBOARD_SCRIPT"
+  wait_for_tmux_session "$tmux_tmpdir" "termux-dashboard"
+  local enabled_windows
+  enabled_windows="$(tmux_exec "$tmux_tmpdir" list-windows -t termux-dashboard -F '#{window_name}')"
+  local expected_enabled=$'Aliveness Window\nCurrent Project Window\nProjects Window\nNew Window\nScripts Window\nCodex Alerts Window'
+  if [ "$enabled_windows" != "$expected_enabled" ]; then
+    fail "enabled alerts window order mismatch (observed: $enabled_windows)"
+  fi
+  wait_for_pane_cwd "$tmux_tmpdir" "termux-dashboard:Codex Alerts Window" "$home_dir/.local/bin"
+
+  tmux_exec "$tmux_tmpdir" select-window -t "termux-dashboard:Scripts Window"
+  env -u TMUX HOME="$home_dir" TMUX_TMPDIR="$tmux_tmpdir" TERMUX_DASHBOARD_NO_ATTACH=1 bash "$DASHBOARD_SCRIPT"
+  wait_for_selected_window "$tmux_tmpdir" "termux-dashboard" "Scripts Window"
+  local reattach_windows
+  reattach_windows="$(tmux_exec "$tmux_tmpdir" list-windows -t termux-dashboard -F '#{window_name}')"
+  if [ "$reattach_windows" != "$expected_enabled" ]; then
+    fail "reattach changed alerts window layout"
+  fi
+  tmux_exec "$tmux_tmpdir" kill-session -t termux-dashboard >/dev/null 2>&1 || true
+
+  printf '0\n' > "$home_dir/.config/termux-dashboard/aliveness_enabled"
+  env -u TMUX HOME="$home_dir" TMUX_TMPDIR="$tmux_tmpdir" TERMUX_DASHBOARD_NO_ATTACH=1 bash "$DASHBOARD_SCRIPT"
+  wait_for_tmux_session "$tmux_tmpdir" "termux-dashboard"
+  local disabled_windows
+  disabled_windows="$(tmux_exec "$tmux_tmpdir" list-windows -t termux-dashboard -F '#{window_name}')"
+  local expected_disabled=$'Current Project Window\nProjects Window\nNew Window\nScripts Window\nCodex Alerts Window'
+  if [ "$disabled_windows" != "$expected_disabled" ]; then
+    fail "disabled alerts window order mismatch (observed: $disabled_windows)"
+  fi
+  wait_for_pane_cwd "$tmux_tmpdir" "termux-dashboard:Codex Alerts Window" "$home_dir/.local/bin"
+  tmux_exec "$tmux_tmpdir" kill-session -t termux-dashboard >/dev/null 2>&1 || true
+
+  rmdir "$home_dir/.local/bin" "$home_dir/.local"
+  env -u TMUX HOME="$home_dir" TMUX_TMPDIR="$tmux_tmpdir" TERMUX_DASHBOARD_NO_ATTACH=1 bash "$DASHBOARD_SCRIPT"
+  wait_for_tmux_session "$tmux_tmpdir" "termux-dashboard"
+  wait_for_pane_cwd "$tmux_tmpdir" "termux-dashboard:Codex Alerts Window" "$REPO_ROOT/scripts"
+  tmux_exec "$tmux_tmpdir" kill-session -t termux-dashboard >/dev/null 2>&1 || true
+}
+
 main() {
   require_commands bash git tmux mktemp
 
@@ -525,6 +688,10 @@ main() {
   fi
 
   run_test "help output" test_help_output
+  run_test "codex-alert command resolution" test_codex_alert_command_resolution
+  run_test "codex-alert actions and status" test_codex_alert_actions_and_status
+  run_test "codex-alert safe failures" test_codex_alert_safe_failures
+  run_test "codex-alert tmux layout and reattach" test_codex_alert_tmux_layout_and_reattach
   run_test "pin files absent" test_pins_absent
   run_test "pin file filtering" test_pin_filtering
   run_test "behind-only pull gating" test_behind_only_pull_gating

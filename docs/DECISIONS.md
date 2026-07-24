@@ -45,3 +45,11 @@ This file tracks curated, dashboard-only decisions for this repo.
 - Decision: Pinned files are user-editable config; recent/last files are internal runtime state.
 - Consequence: Docs and help output should preserve this distinction and avoid implying `.txt` on recent state files.
 - Follow-up note: if legacy `recent_projects.txt` or `recent_scripts.txt` files are encountered in user environments, runtime compatibility handling should be addressed in a later runtime slice.
+
+### D-007 — Codex alerts remain a thin external control surface
+
+- Status: Locked
+- Decision: `termux-dashboard` may present a dedicated Codex alerts window, but it must invoke the installed `codex-alert` command and consume `codex-alert status --json` rather than copying watcher, SSH, notification, deduplication, wake-lock, configuration, or privacy logic.
+- Decision: The canonical `codex-alert` implementation remains owned by `i-schuyler/crosshost-utils`.
+- Consequence: Dashboard tests use a stub command and do not require a live VPS or Android notification transport.
+- Consequence: Installation and shortcut propagation remain downstream responsibilities of `termux-shortcuts`.

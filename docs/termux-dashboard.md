@@ -1,6 +1,6 @@
 # termux-dashboard (Canonical Anchor)
 
-Status: docs anchor only for later implementation slices.
+Status: canonical runtime behavior.
 
 ## Shortcut identity
 
@@ -12,20 +12,22 @@ Status: docs anchor only for later implementation slices.
 
 ## tmux window contract
 
-When `Aliveness Window` is enabled, the dashboard session uses exactly 5 windows in this exact order:
+When `Aliveness Window` is enabled, the dashboard session uses exactly 6 windows in this exact order:
 
 1. `Aliveness Window`
 2. `Current Project Window`
 3. `Projects Window`
 4. `New Window`
 5. `Scripts Window`
+6. `Codex Alerts Window`
 
-When `Aliveness Window` is disabled, the dashboard session uses exactly 4 windows in this exact order:
+When `Aliveness Window` is disabled, the dashboard session uses exactly 5 windows in this exact order:
 
 1. `Current Project Window`
 2. `Projects Window`
 3. `New Window`
 4. `Scripts Window`
+5. `Codex Alerts Window`
 
 `Aliveness Window` is shown first on fresh session creation only when enabled.
 
@@ -92,6 +94,14 @@ test
 test
 - Drain score (1–10): 5
 
+## Codex Alerts Window
+
+`Codex Alerts Window` is appended after `Scripts Window` on fresh session creation. It starts in `$HOME/.local/bin` when that directory exists and otherwise uses the dashboard script directory as the explicit startup fallback. The direct entry point is `termux-dashboard --codex-alerts-window`.
+
+The dashboard resolves an executable `codex-alert` in this order: `TERMUX_DASHBOARD_CODEX_ALERT_COMMAND`, `$HOME/.local/bin/codex-alert`, then `codex-alert` from `PATH`. Its looping menu maps Start, reliable Start, four-hour Start, Stop, Send test alert, Doctor, and bounded View logs directly to the installed command. Status is a compact rendering of `codex-alert status --json`; unknown fields are ignored and optional missing values use safe placeholders. Missing commands, nonzero status exits, malformed JSON, and unavailable Python JSON parsing report concise errors without terminating the window.
+
+The dashboard owns only menu presentation and status summarization. `crosshost-utils` remains authoritative for SSH, watcher, notification, event, deduplication, wake-lock, configuration, logging, and privacy behavior. The dashboard does not install or automatically start the watcher and does not provide boot startup, widget discovery, edge lighting, or `logs --follow`.
+
 ## Window behavior
 
 - No dashboard window may silently fall back to plain `~`; every flow must land in an explicit target directory.
@@ -112,10 +122,11 @@ test
 - `Projects Window` opens the configured projects path (default `~/projects`), never plain `~`.
 - `New Window` is repeatable and mirrors the `Current Project Window` flow, including the same repo-status summary behavior, stale-branch cleanup, pull-gating, and working-directory guarantees.
 - `Scripts Window` lists scripts from `~/bin`; default runs last-used script; startup/fallback/`Exit` path is the configured scripts path (default `~/bin`), never plain `~`.
+- `Codex Alerts Window` starts in `$HOME/.local/bin` when present and otherwise in the explicit dashboard script-directory fallback, never plain `~`.
 - `Aliveness Window` is a startup prompt window, not a persistent workspace window.
 - After the aliveness prompt flow completes, dashboard focus moves to `Current Project Window`.
 - `Aliveness Window` must not interrupt normal reattach behavior.
-- When `Aliveness Window` is disabled, dashboard startup must use the 4-window layout and must not create a hidden or inert aliveness window.
+- When `Aliveness Window` is disabled, dashboard startup must use the 5-window layout and must not create a hidden or inert aliveness window.
 
 ## Safety and state
 
