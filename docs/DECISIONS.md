@@ -53,3 +53,25 @@ This file tracks curated, dashboard-only decisions for this repo.
 - Decision: The canonical `codex-alert` implementation remains owned by `i-schuyler/crosshost-utils`.
 - Consequence: Dashboard tests use a stub command and do not require a live VPS or Android notification transport.
 - Consequence: Installation and shortcut propagation remain downstream responsibilities of `termux-shortcuts`.
+
+### D-008 — Heartloom Site window remains a thin external control surface
+
+- Status: Locked direction; runtime implementation pending
+- Decision: `termux-dashboard` should provide a dedicated **Heartloom Site** window for Schuyler's website authoring and publishing workflow.
+- Decision: The dashboard must invoke the installed external `heartloom-site` command rather than copying repository sync, Obsidian reconciliation, preview, Git, pull-request, CI, merge, deployment, rollback, or smoke-check logic.
+- Decision: The canonical `heartloom-site` implementation and its content/status contracts remain owned by `i-schuyler/heartloom-website`.
+- Decision: The dashboard should consume a stable machine-readable status and progress-event interface while rendering friendly human-facing progress.
+- Decision: Installation and shortcut propagation remain downstream responsibilities of `i-schuyler/termux-shortcuts`.
+- Required initial actions:
+  - Sync current website copy
+  - Preview changes
+  - Publish changes
+  - Show status
+  - Exit or return to the dashboard
+- Required progress behavior:
+  - show each active phase, such as syncing, validating, building, preparing a pull request, waiting for CI, merging, deploying, smoke-checking, and syncing the merged copy back to Obsidian;
+  - provide heartbeat or elapsed-time feedback during long-running phases;
+  - show failure phase, production-modification state, rollback state, and next safe action;
+  - show final live links after success.
+- Consequence: Dashboard tests should use a stub `heartloom-site` command and synthetic event/status output; they must not require a live vault, GitHub mutation, VPS, production deployment, or network service.
+- Consequence: The Heartloom Site window should not be implemented until the external command contract is documented and stable enough to test against.
